@@ -331,19 +331,43 @@ impl<'a> Write for PeFile<'a> {
         // Write PE signature
         out.put_slice(b"PE\0\0");
 
-        // Write COFF header
+        // Calculate symbol table info
+        let (pointer_to_symbol_table, number_of_symbols) = if let Some(symbol_table) = &self.symbol_table {
+            // Calculate total number of symbol table entries including aux symbols
+            let number_of_symbols = symbol_table.entries.iter()
+                .map(|entry| 1 + entry.number_of_aux_symbols as u32)
+                .sum();
+
+            // Symbol table follows section headers
+            let pointer_to_symbol_table = self.dos_header.e_lfanew as u32 + 4 + // PE signature
+                20 + // COFF header size
+                self.coff_header.size_of_optional_header as u32 +
+                (self.section_headers.len() * 40) as u32; // Each section header is 40 bytes
+
+            (pointer_to_symbol_table, number_of_symbols)
+        } else {
+            (0, 0)
+        };
+
+        // Write COFF header with calculated values
         out.put_u16_le(self.coff_header.machine as u16);
-        out.put_u16_le(self.coff_header.number_of_sections);
+        out.put_u16_le(self.section_headers.len() as u16);
         out.put_u32_le(self.coff_header.time_date_stamp);
-        out.put_u32_le(self.coff_header.pointer_to_symbol_table);
-        out.put_u32_le(self.coff_header.number_of_symbols);
+        out.put_u32_le(pointer_to_symbol_table);
+        out.put_u32_le(number_of_symbols);
         out.put_u16_le(self.coff_header.size_of_optional_header);
         out.put_u16_le(self.coff_header.characteristics.bits());
 
         // Write optional header
         self.optional_header.write(out)?;
 
-        // Write section headers
+        // Track current position for calculating raw data pointers
+        let mut current_raw_data_pos = self.dos_header.e_lfanew as u32 + 4 + // PE signature
+            20 + // COFF header size
+            self.coff_header.size_of_optional_header as u32 +
+            (self.section_headers.len() * 40) as u32; // Section headers
+
+        // Write section headers with calculated values
         for section in &self.section_headers {
             // Write name (padded to 8 bytes)
             let name_bytes = section.name.as_bytes();
@@ -355,24 +379,36 @@ impl<'a> Write for PeFile<'a> {
             out.put_u32_le(section.virtual_size);
             out.put_u32_le(section.virtual_address);
             out.put_u32_le(section.size_of_raw_data);
-            out.put_u32_le(section.pointer_to_raw_data);
-            out.put_u32_le(section.pointer_to_relocations);
-            out.put_u32_le(section.pointer_to_linenumbers);
-            out.put_u16_le(section.number_of_relocations);
-            out.put_u16_le(section.number_of_linenumbers);
+            out.put_u32_le(current_raw_data_pos); // Calculate pointer_to_raw_data
+            
+            // Calculate relocation pointer if section has relocations
+            let pointer_to_relocations = if !section.relocations.is_empty() {
+                current_raw_data_pos + section.size_of_raw_data
+            } else {
+                0
+            };
+            out.put_u32_le(pointer_to_relocations);
+            
+            out.put_u32_le(0); // pointer_to_linenumbers (not supported)
+            out.put_u16_le(section.relocations.len() as u16);
+            out.put_u16_le(0); // number_of_linenumbers (not supported)
             out.put_u32_le(section.characteristics.bits());
+
+            // Update current position
+            current_raw_data_pos += section.size_of_raw_data;
+            if !section.relocations.is_empty() {
+                current_raw_data_pos += (section.relocations.len() * 10) as u32; // Each relocation is 10 bytes
+            }
         }
 
         // Write symbol table if present
         if let Some(symbol_table) = &self.symbol_table {
-            // TODO: Implement symbol table writing
-            // This requires implementing Write for SymbolTableEntry
+            symbol_table.write(out)?;
         }
 
-        // Write string table if present
+        // Write string table if present 
         if let Some(string_table) = &self.string_table {
-            // TODO: Implement string table writing
-            // This requires implementing Write for StringTable
+            string_table.write(out)?;
         }
 
         Ok(())
