@@ -81,50 +81,34 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
         let all_data = *input;
 
         // Check magic
-        let magic = take(8usize)
+        ARCHIVE_MAGIC
             .context(StrContext::Label("archive magic"))
             .parse_next(input)?;
-        if magic != ARCHIVE_MAGIC {
-            return Err(ContextError::context(
-                "invalid archive magic",
-                input,
-                StrContext::Label("archive magic"),
-            ));
-        }
 
         let mut members = Vec::new();
         let mut first_linker = None;
         let mut second_linker = None;
         let mut longnames = None;
 
-        // Parse archive members until we run out of data
         while !input.is_empty() {
             let member = ArchiveMember::parse.parse_next(input)?;
 
             match &member.header.name {
                 ArchiveMemberName::FirstLinker => {
-                    let linker =
-                        FirstLinkerMember::parse_with_size(member.data.len(), &mut &*member.data)?;
-                    first_linker = Some(linker);
+                    first_linker = Some(FirstLinkerMember::parse(&mut &*member.data)?);
                 }
                 ArchiveMemberName::SecondLinker => {
-                    let linker =
-                        SecondLinkerMember::parse_with_size(member.data.len(), &mut &*member.data)?;
-                    second_linker = Some(linker);
+                    second_linker = Some(SecondLinkerMember::parse(&mut &*member.data)?);
                 }
                 ArchiveMemberName::Longnames => {
-                    longnames = Some(LongnamesMember {
-                        strings: member.data,
-                    });
+                    longnames = Some(LongnamesMember { strings: member.data });
                 }
-                _ => {
-                    members.push(member);
-                }
+                _ => members.push(member),
             }
 
             // Archive members are 2-byte aligned
             if input.len() % 2 == 1 {
-                let _pad = take(1usize).parse_next(input)?;
+                take(1usize).parse_next(input)?;
             }
         }
 
@@ -227,37 +211,24 @@ impl<'a> Parse<'a> for ArchiveMemberHeader<'a> {
     }
 }
 
-impl<'a> FirstLinkerMember<'a> {
-    fn parse_with_size(size: usize, input: &mut &'a [u8]) -> Result<Self, ContextError> {
-        let num_symbols = le_u32
-            .context(StrContext::Label("number of symbols"))
-            .parse_next(input)?;
+impl<'a> Parse<'a> for FirstLinkerMember<'a> {
+    type Error = ContextError;
 
-        let offsets = repeat(
-            num_symbols as usize,
-            le_u32.context(StrContext::Label("symbol offset")),
-        )
-        .parse_next(input)?;
-
+    fn parse(input: &mut &'a [u8]) -> Result<Self, ContextError> {
+        let num_symbols = le_u32.parse_next(input)?;
+        
+        let offsets = repeat(num_symbols as usize, le_u32).parse_next(input)?;
         let mut symbols = Vec::with_capacity(num_symbols as usize);
         let mut string_data = *input;
 
         for offset in offsets {
-            let name_end = string_data.iter().position(|&b| b == 0).ok_or_else(|| {
-                ContextError::context(
-                    "unterminated string",
-                    input,
-                    StrContext::Label("symbol name"),
-                )
-            })?;
+            let name_end = string_data
+                .iter()
+                .position(|&b| b == 0)
+                .ok_or_else(|| ContextError::context("unterminated string", input, StrContext::Label("symbol name")))?;
 
-            let name = std::str::from_utf8(&string_data[..name_end]).map_err(|_| {
-                ContextError::context(
-                    "invalid symbol name",
-                    input,
-                    StrContext::Label("symbol name"),
-                )
-            })?;
+            let name = std::str::from_utf8(&string_data[..name_end])
+                .map_err(|_| ContextError::context("invalid symbol name", input, StrContext::Label("symbol name")))?;
 
             symbols.push((offset, Cow::Borrowed(name)));
             string_data = &string_data[name_end + 1..];
@@ -267,47 +238,27 @@ impl<'a> FirstLinkerMember<'a> {
     }
 }
 
-impl<'a> SecondLinkerMember<'a> {
-    fn parse_with_size(size: usize, input: &mut &'a [u8]) -> Result<Self, ContextError> {
-        let num_members = le_u32
-            .context(StrContext::Label("number of members"))
-            .parse_next(input)?;
+impl<'a> Parse<'a> for SecondLinkerMember<'a> {
+    type Error = ContextError;
 
-        let member_offsets = repeat(
-            num_members as usize,
-            le_u32.context(StrContext::Label("member offset")),
-        )
-        .parse_next(input)?;
+    fn parse(input: &mut &'a [u8]) -> Result<Self, ContextError> {
+        let num_members = le_u32.parse_next(input)?;
+        let member_offsets = repeat(num_members as usize, le_u32).parse_next(input)?;
 
-        let num_symbols = le_u32
-            .context(StrContext::Label("number of symbols"))
-            .parse_next(input)?;
-
-        let indices = repeat(
-            num_symbols as usize,
-            le_u16.context(StrContext::Label("symbol index")),
-        )
-        .parse_next(input)?;
+        let num_symbols = le_u32.parse_next(input)?;
+        let indices = repeat(num_symbols as usize, le_u16).parse_next(input)?;
 
         let mut symbols = Vec::with_capacity(num_symbols as usize);
         let mut string_data = *input;
 
         for index in indices {
-            let name_end = string_data.iter().position(|&b| b == 0).ok_or_else(|| {
-                ContextError::context(
-                    "unterminated string",
-                    input,
-                    StrContext::Label("symbol name"),
-                )
-            })?;
+            let name_end = string_data
+                .iter()
+                .position(|&b| b == 0)
+                .ok_or_else(|| ContextError::context("unterminated string", input, StrContext::Label("symbol name")))?;
 
-            let name = std::str::from_utf8(&string_data[..name_end]).map_err(|_| {
-                ContextError::context(
-                    "invalid symbol name",
-                    input,
-                    StrContext::Label("symbol name"),
-                )
-            })?;
+            let name = std::str::from_utf8(&string_data[..name_end])
+                .map_err(|_| ContextError::context("invalid symbol name", input, StrContext::Label("symbol name")))?;
 
             symbols.push((index, Cow::Borrowed(name)));
             string_data = &string_data[name_end + 1..];
