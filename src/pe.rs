@@ -450,13 +450,42 @@ impl<'a> Parse<'a> for PeFile<'a> {
             .context(StrContext::Label("optional header"))
             .parse_next(input)?;
 
-        let mut section_headers = Vec::new();
-        for _ in 0..coff_header.number_of_sections {
-            section_headers.push(
-                CoffSectionHeader::parse
-                    .context(StrContext::Label("section header"))
-                    .parse_next(input)?,
-            );
+        let section_headers: Vec<_> = repeat(
+            coff_header.number_of_sections as usize,
+            CoffSectionHeader::parse,
+        )
+        .context(StrContext::Label("sections"))
+        .parse_next(input)?;
+
+        let mut sections: Vec<_> = section_headers
+            .into_iter()
+            .map(|header| CoffSection {
+                data: if header.pointer_to_raw_data > 0 && header.size_of_raw_data > 0 {
+                    let ptr = header.pointer_to_raw_data as usize;
+                    let len = header.size_of_raw_data as usize;
+                    Some(&all_data[ptr..ptr + len])
+                } else {
+                    None
+                },
+                header,
+                relocations: vec![],
+            })
+            .collect();
+
+        // Parse relocations for each section
+        for section in &mut sections {
+            if section.header.number_of_relocations > 0 && section.header.pointer_to_relocations > 0 {
+                let reloc_data = &mut &all_data[section.header.pointer_to_relocations as usize..];
+
+                let section_relocs: Vec<_> = repeat(
+                    section.header.number_of_relocations as usize,
+                    CoffRelocation::parse,
+                )
+                .context(StrContext::Label("relocations"))
+                .parse_next(reloc_data)?;
+
+                section.relocations.extend(section_relocs);
+            }
         }
 
         // Parse symbol table and string table if present
