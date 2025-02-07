@@ -28,11 +28,17 @@ fn main() -> anyhow::Result<()> {
         .map(|file_path| std::fs::read(file_path))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let object_files = file_data
+    let mut object_files = file_data
         .iter()
         .map(|file_data| CoffFile::parse(&mut file_data.as_slice()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!(e))?;
+
+    for (object_file_idx, object_file) in object_files.iter_mut().enumerate() {
+        for section in &mut object_file.sections {
+            section.id.object_idx = object_file_idx;
+        }
+    }
 
     println!("{object_files:#?}");
 
@@ -42,7 +48,6 @@ fn main() -> anyhow::Result<()> {
         .collect_vec();
 
     let merged_sections = order_and_merge_sections(sections)?;
-
     let (code_size, init_data_size, uninit_data_size) = count_section_totals(&merged_sections);
 
     let package_version = clap::crate_version!();
