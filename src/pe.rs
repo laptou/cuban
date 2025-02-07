@@ -361,6 +361,49 @@ pub struct PeFile<'a> {
 }
 
 impl<'a> Layout for PeFile<'a> {
+    fn total_size(&self) -> u32 {
+        // Start with DOS header size
+        let dos_header_size = self.dos_header.total_size();
+
+        // Calculate PE header offset - must be aligned to 8 bytes
+        let pe_header_offset = (dos_header_size + 7) & !7;
+
+        // PE signature (4 bytes) + COFF header (20 bytes)
+        let mut current_offset = pe_header_offset + 24;
+
+        // Optional header
+        current_offset += self.optional_header.total_size();
+
+        // Section headers (40 bytes each)
+        let section_headers_size = (self.sections.len() * 40) as u32;
+        current_offset += section_headers_size;
+
+        // Calculate total size including section data and relocations
+        let mut data_offset = current_offset;
+        for section in &self.sections {
+            if let Some(data) = section.data {
+                data_offset += data.len() as u32;
+
+                // Add space for relocations if any
+                if !section.relocations.is_empty() {
+                    data_offset += (section.relocations.len() * 10) as u32; // Each relocation is 10 bytes
+                }
+            }
+        }
+
+        // Add symbol table size if present
+        if let Some(symbol_table) = &self.symbol_table {
+            let num_symbols: u32 = symbol_table
+                .entries
+                .iter()
+                .map(|e| 1 + e.number_of_aux_symbols as u32)
+                .sum();
+            data_offset += num_symbols * 18; // Each symbol is 18 bytes
+        }
+
+        data_offset
+    }
+
     fn fix_layout(&mut self) -> u32 {
         // Start with DOS header size
         let dos_header_size = self.dos_header.fix_layout();
