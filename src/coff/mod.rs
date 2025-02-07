@@ -27,6 +27,8 @@ pub mod string_table;
 pub mod symbol_table;
 pub mod archive;
 
+pub use archive::CoffArchive;
+
 use relocations::{CoffRelocation, RelocationType};
 
 #[derive(Error, Debug)]
