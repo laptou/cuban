@@ -9,8 +9,8 @@ use winnow::{
 };
 
 use crate::{
-    parse::Parse,
-    util::fmt::{byte_str_format, ByteStr},
+    parse::{Parse, Write},
+    util::fmt::ByteStr,
 };
 
 #[derive(Clone)]
