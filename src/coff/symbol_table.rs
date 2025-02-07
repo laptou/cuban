@@ -1,5 +1,6 @@
 use std::ffi::CStr;
 
+use bytes::BufMut;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 use winnow::{
@@ -103,6 +104,107 @@ pub enum AuxSymbolRecord {
         selection: u8,
     },
     Raw([u8; 18]), // For unhandled auxiliary records
+}
+
+impl Write for AuxSymbolRecord {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        match self {
+            Self::Function {
+                tag_index,
+                total_size,
+                pointer_to_line_number,
+                pointer_to_next_function,
+            } => {
+                out.put_u32_le(*tag_index);
+                out.put_u32_le(*total_size);
+                out.put_u32_le(*pointer_to_line_number);
+                out.put_u32_le(*pointer_to_next_function);
+                out.put_bytes(0, 2); // Unused
+            }
+            Self::BeginEndFunction {
+                line_number,
+                pointer_to_next_function,
+            } => {
+                out.put_u16_le(*line_number);
+                out.put_u32_le(*pointer_to_next_function);
+                out.put_bytes(0, 12); // Unused
+            }
+            Self::WeakExternal {
+                tag_index,
+                characteristics,
+            } => {
+                out.put_u32_le(*tag_index);
+                out.put_u32_le(*characteristics);
+                out.put_bytes(0, 10); // Unused
+            }
+            Self::File { filename } => {
+                out.put_slice(filename);
+            }
+            Self::Section {
+                length,
+                number_of_relocations,
+                number_of_line_numbers,
+                checksum,
+                number,
+                selection,
+            } => {
+                out.put_u32_le(*length);
+                out.put_u16_le(*number_of_relocations);
+                out.put_u16_le(*number_of_line_numbers);
+                out.put_u32_le(*checksum);
+                out.put_u16_le(*number);
+                out.put_u8(*selection);
+                out.put_bytes(0, 3); // Unused
+            }
+            Self::Raw(raw) => {
+                out.put_slice(raw);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Write for SymbolTableEntry {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        // Write name
+        match self.name {
+            Name::Short(bytes) => {
+                out.put_slice(&bytes);
+            }
+            Name::Long(offset) => {
+                out.put_u32_le(0); // First 4 bytes zero
+                out.put_u32_le(offset); // Offset into string table
+            }
+        }
+
+        out.put_u32_le(self.value);
+        out.put_i16_le(self.section_number);
+        out.put_u16_le(self.type_);
+        out.put_u8(self.storage_class as u8);
+        out.put_u8(self.number_of_aux_symbols);
+
+        // Write auxiliary symbols
+        for aux in &self.aux_symbols {
+            aux.write(out)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Write for SymbolTable {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        for entry in &self.entries {
+            entry.write(out)?;
+        }
+        Ok(())
+    }
 }
 
 impl<'a> Parse<'a> for SymbolTableEntry {
