@@ -31,7 +31,7 @@ pub struct CoffArchive<'a> {
 #[derive(Debug, Clone)]
 pub struct ArchiveMember<'a> {
     pub header: ArchiveMemberHeader<'a>,
-    pub data: Cow<'a, [u8]>,
+    pub data: &'a [u8],
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +71,7 @@ pub struct SecondLinkerMember<'a> {
 
 #[derive(Debug, Clone)]
 pub struct LongnamesMember<'a> {
-    pub strings: Cow<'a, [u8]>,
+    pub strings: &'a [u8],
 }
 
 impl<'a> Parse<'a> for CoffArchive<'a> {
@@ -91,17 +91,19 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
         let mut longnames = None;
 
         while !input.is_empty() {
-            let member = ArchiveMember::parse.parse_next(input)?;
+            let mut member: ArchiveMember<'a> = ArchiveMember::parse.parse_next(input)?;
 
             match &member.header.name {
                 ArchiveMemberName::FirstLinker => {
-                    first_linker = Some(FirstLinkerMember::parse(&mut &*member.data)?);
+                    first_linker = Some(FirstLinkerMember::parse(&mut member.data)?);
                 }
                 ArchiveMemberName::SecondLinker => {
-                    second_linker = Some(SecondLinkerMember::parse(&mut &*member.data)?);
+                    second_linker = Some(SecondLinkerMember::parse(&mut member.data)?);
                 }
                 ArchiveMemberName::Longnames => {
-                    longnames = Some(LongnamesMember { strings: member.data });
+                    longnames = Some(LongnamesMember {
+                        strings: member.data,
+                    });
                 }
                 _ => members.push(member),
             }
@@ -132,7 +134,7 @@ impl<'a> Parse<'a> for ArchiveMember<'a> {
 
         Ok(ArchiveMember {
             header,
-            data: Cow::Borrowed(data),
+            data,
         })
     }
 }
@@ -216,22 +218,17 @@ impl<'a> Parse<'a> for FirstLinkerMember<'a> {
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, ContextError> {
         let num_symbols = le_u32.parse_next(input)?;
-        
-        let offsets = repeat(num_symbols as usize, le_u32).parse_next(input)?;
+
+        let offsets: Vec<u32> = repeat(num_symbols as usize, le_u32).parse_next(input)?;
         let mut symbols = Vec::with_capacity(num_symbols as usize);
-        let mut string_data = *input;
 
         for offset in offsets {
-            let name_end = string_data
-                .iter()
-                .position(|&b| b == 0)
-                .ok_or_else(|| ContextError::context("unterminated string", input, StrContext::Label("symbol name")))?;
-
-            let name = std::str::from_utf8(&string_data[..name_end])
-                .map_err(|_| ContextError::context("invalid symbol name", input, StrContext::Label("symbol name")))?;
+            let name = take_until(0.., 0)
+                .try_map(std::str::from_utf8)
+                .context(StrContext::Label("symbol name"))
+                .parse_next(input)?;
 
             symbols.push((offset, Cow::Borrowed(name)));
-            string_data = &string_data[name_end + 1..];
         }
 
         Ok(FirstLinkerMember { symbols })
@@ -246,22 +243,17 @@ impl<'a> Parse<'a> for SecondLinkerMember<'a> {
         let member_offsets = repeat(num_members as usize, le_u32).parse_next(input)?;
 
         let num_symbols = le_u32.parse_next(input)?;
-        let indices = repeat(num_symbols as usize, le_u16).parse_next(input)?;
+        let indices: Vec<u16> = repeat(num_symbols as usize, le_u16).parse_next(input)?;
 
         let mut symbols = Vec::with_capacity(num_symbols as usize);
-        let mut string_data = *input;
 
         for index in indices {
-            let name_end = string_data
-                .iter()
-                .position(|&b| b == 0)
-                .ok_or_else(|| ContextError::context("unterminated string", input, StrContext::Label("symbol name")))?;
-
-            let name = std::str::from_utf8(&string_data[..name_end])
-                .map_err(|_| ContextError::context("invalid symbol name", input, StrContext::Label("symbol name")))?;
+            let name = take_until(0.., 0)
+                .try_map(std::str::from_utf8)
+                .context(StrContext::Label("symbol name"))
+                .parse_next(input)?;
 
             symbols.push((index, Cow::Borrowed(name)));
-            string_data = &string_data[name_end + 1..];
         }
 
         Ok(SecondLinkerMember {
