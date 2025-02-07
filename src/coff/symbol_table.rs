@@ -111,67 +111,8 @@ impl<'a> Parse<'a> for SymbolTableEntry {
         // Parse auxiliary symbol records
         let mut aux_symbols = Vec::with_capacity(number_of_aux_symbols as usize);
         for _ in 0..number_of_aux_symbols {
-            let aux_record = match storage_class {
-                StorageClass::Function => {
-                    let tag_index = le_u32.parse_next(input)?;
-                    let total_size = le_u32.parse_next(input)?;
-                    let pointer_to_line_number = le_u32.parse_next(input)?;
-                    let pointer_to_next_function = le_u32.parse_next(input)?;
-                    take(2usize).parse_next(input)?; // Unused
-                    AuxSymbolRecord::Function {
-                        tag_index,
-                        total_size,
-                        pointer_to_line_number,
-                        pointer_to_next_function,
-                    }
-                }
-                StorageClass::Block => {
-                    let line_number = le_u16.parse_next(input)?;
-                    let pointer_to_next_function = le_u32.parse_next(input)?;
-                    take(12usize).parse_next(input)?; // Unused
-                    AuxSymbolRecord::BeginEndFunction {
-                        line_number,
-                        pointer_to_next_function,
-                    }
-                }
-                StorageClass::WeakExternal => {
-                    let tag_index = le_u32.parse_next(input)?;
-                    let characteristics = le_u32.parse_next(input)?;
-                    take(10usize).parse_next(input)?; // Unused
-                    AuxSymbolRecord::WeakExternal {
-                        tag_index,
-                        characteristics,
-                    }
-                }
-                StorageClass::File => {
-                    let filename = take(18usize).parse_next(input)?;
-                    AuxSymbolRecord::File {
-                        filename: filename.try_into().unwrap(),
-                    }
-                }
-                StorageClass::Section => {
-                    let length = le_u32.parse_next(input)?;
-                    let number_of_relocations = le_u16.parse_next(input)?;
-                    let number_of_line_numbers = le_u16.parse_next(input)?;
-                    let checksum = le_u32.parse_next(input)?;
-                    let number = le_u16.parse_next(input)?;
-                    let selection = input.next_token().unwrap();
-                    take(3usize).parse_next(input)?; // Unused
-                    AuxSymbolRecord::Section {
-                        length,
-                        number_of_relocations,
-                        number_of_line_numbers,
-                        checksum,
-                        number,
-                        selection,
-                    }
-                }
-                _ => {
-                    // Save raw bytes for unhandled aux record types
-                    let raw = take(18usize).parse_next(input)?;
-                    AuxSymbolRecord::Raw(raw.try_into().unwrap())
-                }
-            };
+            let aux_record = AuxSymbolRecord::parse_with_class(storage_class, input)
+                .context(StrContext::Label("aux symbol"))?;
             aux_symbols.push(aux_record);
         }
 
@@ -184,5 +125,70 @@ impl<'a> Parse<'a> for SymbolTableEntry {
             number_of_aux_symbols,
             aux_symbols,
         })
+    }
+}
+impl AuxSymbolRecord {
+    fn parse_with_class<'a>(storage_class: StorageClass, input: &mut &'a [u8]) -> Result<Self, ContextError> {
+        match storage_class {
+            StorageClass::Function => {
+                let tag_index = le_u32.context(StrContext::Label("tag index")).parse_next(input)?;
+                let total_size = le_u32.context(StrContext::Label("total size")).parse_next(input)?;
+                let pointer_to_line_number = le_u32.context(StrContext::Label("line number pointer")).parse_next(input)?;
+                let pointer_to_next_function = le_u32.context(StrContext::Label("next function pointer")).parse_next(input)?;
+                take(2usize).context(StrContext::Label("unused")).parse_next(input)?;
+                Ok(AuxSymbolRecord::Function {
+                    tag_index,
+                    total_size,
+                    pointer_to_line_number,
+                    pointer_to_next_function,
+                })
+            }
+            StorageClass::Block => {
+                let line_number = le_u16.context(StrContext::Label("line number")).parse_next(input)?;
+                let pointer_to_next_function = le_u32.context(StrContext::Label("next function pointer")).parse_next(input)?;
+                take(12usize).context(StrContext::Label("unused")).parse_next(input)?;
+                Ok(AuxSymbolRecord::BeginEndFunction {
+                    line_number,
+                    pointer_to_next_function,
+                })
+            }
+            StorageClass::WeakExternal => {
+                let tag_index = le_u32.context(StrContext::Label("tag index")).parse_next(input)?;
+                let characteristics = le_u32.context(StrContext::Label("characteristics")).parse_next(input)?;
+                take(10usize).context(StrContext::Label("unused")).parse_next(input)?;
+                Ok(AuxSymbolRecord::WeakExternal {
+                    tag_index,
+                    characteristics,
+                })
+            }
+            StorageClass::File => {
+                let filename = take(18usize).context(StrContext::Label("filename")).parse_next(input)?;
+                Ok(AuxSymbolRecord::File {
+                    filename: filename.try_into().unwrap(),
+                })
+            }
+            StorageClass::Section => {
+                let length = le_u32.context(StrContext::Label("length")).parse_next(input)?;
+                let number_of_relocations = le_u16.context(StrContext::Label("relocations")).parse_next(input)?;
+                let number_of_line_numbers = le_u16.context(StrContext::Label("line numbers")).parse_next(input)?;
+                let checksum = le_u32.context(StrContext::Label("checksum")).parse_next(input)?;
+                let number = le_u16.context(StrContext::Label("number")).parse_next(input)?;
+                let selection = input.next_token().unwrap();
+                take(3usize).context(StrContext::Label("unused")).parse_next(input)?;
+                Ok(AuxSymbolRecord::Section {
+                    length,
+                    number_of_relocations,
+                    number_of_line_numbers,
+                    checksum,
+                    number,
+                    selection,
+                })
+            }
+            _ => {
+                // Save raw bytes for unhandled aux record types
+                let raw = take(18usize).context(StrContext::Label("raw aux record")).parse_next(input)?;
+                Ok(AuxSymbolRecord::Raw(raw.try_into().unwrap()))
+            }
+        }
     }
 }
