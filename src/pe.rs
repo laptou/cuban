@@ -4,10 +4,13 @@ use winnow::binary::le_u16;
 use winnow::binary::le_u32;
 use winnow::binary::le_u64;
 use winnow::combinator::opt;
+use winnow::combinator::repeat;
+use winnow::error::ParserError;
 use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 
+use crate::coff::relocations::CoffRelocation;
 use crate::coff::CoffSection;
 use crate::parse::Write;
 
@@ -475,16 +478,7 @@ impl<'a> Parse<'a> for PeFile<'a> {
         // Parse relocations for each section
         for section in &mut sections {
             if section.header.number_of_relocations > 0 && section.header.pointer_to_relocations > 0 {
-                let reloc_data = &mut &all_data[section.header.pointer_to_relocations as usize..];
-
-                let section_relocs: Vec<_> = repeat(
-                    section.header.number_of_relocations as usize,
-                    CoffRelocation::parse,
-                )
-                .context(StrContext::Label("relocations"))
-                .parse_next(reloc_data)?;
-
-                section.relocations.extend(section_relocs);
+                return Err(ContextError::assert(input, "pe file must not contain relocations"));
             }
         }
 
