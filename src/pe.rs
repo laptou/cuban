@@ -22,20 +22,6 @@ use crate::coff::{
 use crate::flags::{DllCharacteristics, Subsystem};
 use crate::parse::Parse;
 
-#[derive(Error, Debug)]
-pub enum PeError<'a> {
-    #[error("invalid dos magic")]
-    InvalidDosMagic,
-    #[error("invalid pe magic")]
-    InvalidPeMagic,
-    #[error("parse error: {0}")]
-    Context(ContextError),
-    #[error("parse error: {0}")]
-    Parse(ParseError<&'a [u8], ContextError>),
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-}
-
 // MS-DOS Header
 #[derive(Debug, Clone, Copy)]
 pub struct DosHeader {

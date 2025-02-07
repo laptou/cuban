@@ -1,26 +1,3 @@
-#[derive(Debug, Clone)]
-pub struct Lazy<'a, T> {
-    data: &'a [u8],
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<'a, T> Lazy<'a, T> {
-    pub fn new(data: &'a [u8]) -> Self {
-        Self {
-            data,
-            _phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<'a, T: Parse<'a>> Lazy<'a, T> {
-    pub fn parse(&self) -> Result<T, T::Error> {
-        let mut data = self.data;
-        let input = &mut data;
-        T::parse(input)
-    }
-}
-
 pub trait Parse<'a>: Sized {
     type Error: 'a;
 
