@@ -23,8 +23,8 @@ use crate::parse::Parse;
 
 pub mod relocations;
 pub mod sections;
-pub mod symbol_table;
 pub mod string_table;
+pub mod symbol_table;
 
 use relocations::{CoffRelocation, RelocationType};
 
@@ -192,6 +192,7 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
 #[derive(Debug, Clone)]
 pub struct CoffSection<'a> {
     pub header: CoffSectionHeader<'a>,
+    pub data: Option<&'a [u8]>,
     pub relocations: Vec<CoffRelocation>,
 }
 
@@ -223,6 +224,13 @@ impl<'a> Parse<'a> for CoffFile<'a> {
         let mut sections: Vec<_> = section_headers
             .into_iter()
             .map(|header| CoffSection {
+                data: if header.pointer_to_raw_data > 0 && header.size_of_raw_data > 0 {
+                    let ptr = header.pointer_to_raw_data as usize;
+                    let len = header.size_of_raw_data as usize;
+                    Some(&all_data[ptr..ptr + len])
+                } else {
+                    None
+                },
                 header,
                 relocations: vec![],
             })
@@ -269,8 +277,9 @@ impl<'a> Parse<'a> for CoffFile<'a> {
 
             // String table follows symbol table
             let symbol_table_size = file_header.number_of_symbols as usize * 18;
-            let string_table_offset = file_header.pointer_to_symbol_table as usize + symbol_table_size;
-            
+            let string_table_offset =
+                file_header.pointer_to_symbol_table as usize + symbol_table_size;
+
             let string_table = if string_table_offset < all_data.len() {
                 let string_table_data = &mut &all_data[string_table_offset..];
                 Some(StringTable::parse(string_table_data)?)
