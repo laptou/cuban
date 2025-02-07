@@ -6,6 +6,9 @@ use winnow::combinator::opt;
 use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
+use bytes::BufMut;
+
+use crate::parse::Write;
 
 use crate::coff::{CoffFileHeader, CoffSectionHeader, StringTable, SymbolTable, symbol_table::SymbolTableEntry};
 use crate::flags::DllCharacteristics;
@@ -32,6 +35,20 @@ pub struct DosHeader {
     pub e_lfanew: u32,
 }
 
+impl Write for DosHeader {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        // Write DOS magic "MZ"
+        out.put_slice(b"MZ");
+        // Write 58 bytes of DOS stub
+        out.put_bytes(0, 58);
+        // Write e_lfanew
+        out.put_u32_le(self.e_lfanew);
+        Ok(())
+    }
+}
+
 impl<'a> Parse<'a> for DosHeader {
     type Error = ContextError;
 
@@ -49,6 +66,16 @@ impl<'a> Parse<'a> for DosHeader {
 pub struct DataDirectory {
     pub virtual_address: u32,
     pub size: u32,
+}
+
+impl Write for DataDirectory {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        out.put_u32_le(self.virtual_address);
+        out.put_u32_le(self.size);
+        Ok(())
+    }
 }
 
 impl<'a> Parse<'a> for DataDirectory {
@@ -98,6 +125,67 @@ pub struct OptionalHeader {
     pub loader_flags: u32,
     pub number_of_rva_and_sizes: u32,
     pub data_directories: Vec<DataDirectory>,
+}
+
+impl Write for OptionalHeader {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        out.put_u16_le(self.magic);
+        out.put_u8(self.major_linker_version);
+        out.put_u8(self.minor_linker_version);
+        out.put_u32_le(self.size_of_code);
+        out.put_u32_le(self.size_of_initialized_data);
+        out.put_u32_le(self.size_of_uninitialized_data);
+        out.put_u32_le(self.address_of_entry_point);
+        out.put_u32_le(self.base_of_code);
+
+        if self.magic == 0x20b {
+            // PE32+
+            out.put_u64_le(self.image_base);
+        } else {
+            // PE32
+            out.put_u32_le(self.image_base as u32);
+        }
+
+        out.put_u32_le(self.section_alignment);
+        out.put_u32_le(self.file_alignment);
+        out.put_u16_le(self.major_operating_system_version);
+        out.put_u16_le(self.minor_operating_system_version);
+        out.put_u16_le(self.major_image_version);
+        out.put_u16_le(self.minor_image_version);
+        out.put_u16_le(self.major_subsystem_version);
+        out.put_u16_le(self.minor_subsystem_version);
+        out.put_u32_le(self.win32_version_value);
+        out.put_u32_le(self.size_of_image);
+        out.put_u32_le(self.size_of_headers);
+        out.put_u32_le(self.checksum);
+        out.put_u16_le(self.subsystem);
+        out.put_u16_le(self.dll_characteristics.bits());
+
+        if self.magic == 0x20b {
+            // PE32+
+            out.put_u64_le(self.size_of_stack_reserve);
+            out.put_u64_le(self.size_of_stack_commit);
+            out.put_u64_le(self.size_of_heap_reserve);
+            out.put_u64_le(self.size_of_heap_commit);
+        } else {
+            // PE32
+            out.put_u32_le(self.size_of_stack_reserve as u32);
+            out.put_u32_le(self.size_of_stack_commit as u32);
+            out.put_u32_le(self.size_of_heap_reserve as u32);
+            out.put_u32_le(self.size_of_heap_commit as u32);
+        }
+
+        out.put_u32_le(self.loader_flags);
+        out.put_u32_le(self.number_of_rva_and_sizes);
+
+        for dir in &self.data_directories {
+            dir.write(out)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a> Parse<'a> for OptionalHeader {
@@ -212,6 +300,69 @@ pub struct PeFile<'a> {
     pub section_headers: Vec<CoffSectionHeader<'a>>,
     pub symbol_table: Option<SymbolTable>,
     pub string_table: Option<StringTable<'a>>,
+}
+
+impl<'a> Write for PeFile<'a> {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        // Write DOS header
+        self.dos_header.write(out)?;
+
+        // Seek to PE header location
+        let current_pos = out.remaining_mut();
+        let padding_size = self.dos_header.e_lfanew as usize - current_pos;
+        out.put_bytes(0, padding_size);
+
+        // Write PE signature
+        out.put_slice(b"PE\0\0");
+
+        // Write COFF header
+        out.put_u16_le(self.coff_header.machine as u16);
+        out.put_u16_le(self.coff_header.number_of_sections);
+        out.put_u32_le(self.coff_header.time_date_stamp);
+        out.put_u32_le(self.coff_header.pointer_to_symbol_table);
+        out.put_u32_le(self.coff_header.number_of_symbols);
+        out.put_u16_le(self.coff_header.size_of_optional_header);
+        out.put_u16_le(self.coff_header.characteristics.bits());
+
+        // Write optional header
+        self.optional_header.write(out)?;
+
+        // Write section headers
+        for section in &self.section_headers {
+            // Write name (padded to 8 bytes)
+            let name_bytes = section.name.as_bytes();
+            out.put_slice(&name_bytes[..std::cmp::min(name_bytes.len(), 8)]);
+            if name_bytes.len() < 8 {
+                out.put_bytes(0, 8 - name_bytes.len());
+            }
+
+            out.put_u32_le(section.virtual_size);
+            out.put_u32_le(section.virtual_address);
+            out.put_u32_le(section.size_of_raw_data);
+            out.put_u32_le(section.pointer_to_raw_data);
+            out.put_u32_le(section.pointer_to_relocations);
+            out.put_u32_le(section.pointer_to_linenumbers);
+            out.put_u16_le(section.number_of_relocations);
+            out.put_u16_le(section.number_of_linenumbers);
+            out.put_u32_le(section.characteristics.bits());
+        }
+
+        // Write symbol table if present
+        if let Some(symbol_table) = &self.symbol_table {
+            // TODO: Implement symbol table writing
+            // This requires implementing Write for SymbolTableEntry
+        }
+
+        // Write string table if present 
+        if let Some(string_table) = &self.string_table {
+            // TODO: Implement string table writing
+            // This requires implementing Write for StringTable
+        }
+
+        Ok(())
+    }
 }
 
 impl<'a> Parse<'a> for PeFile<'a> {
