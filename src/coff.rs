@@ -14,7 +14,8 @@ use winnow::prelude::*;
 use winnow::token::take;
 use winnow::token::take_while;
 
-use crate::parse::Lazy;
+use crate::flags::FileCharacteristics;
+use crate::flags::SectionCharacteristics;
 use crate::parse::Parse;
 
 mod symbol_table;
@@ -75,7 +76,7 @@ pub struct CoffFileHeader {
     pub pointer_to_symbol_table: u32,
     pub number_of_symbols: u32,
     pub size_of_optional_header: u16,
-    pub characteristics: u16,
+    pub characteristics: FileCharacteristics,
 }
 
 impl<'a> Parse<'a> for CoffFileHeader {
@@ -93,7 +94,15 @@ impl<'a> Parse<'a> for CoffFileHeader {
             number_of_symbols,
             size_of_optional_header,
             characteristics,
-        ) = (le_u16, le_u32, le_u32, le_u32, le_u16, le_u16).parse_next(input)?;
+        ) = (
+            le_u16,
+            le_u32,
+            le_u32,
+            le_u32,
+            le_u16,
+            le_u16.verify_map(FileCharacteristics::from_bits),
+        )
+            .parse_next(input)?;
 
         Ok(CoffFileHeader {
             machine,
@@ -118,7 +127,7 @@ pub struct CoffSectionHeader<'a> {
     pub pointer_to_linenumbers: u32,
     pub number_of_relocations: u16,
     pub number_of_linenumbers: u16,
-    pub characteristics: u32,
+    pub characteristics: SectionCharacteristics,
 }
 
 impl<'a> Parse<'a> for CoffSectionHeader<'a> {
@@ -141,7 +150,15 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
             number_of_linenumbers,
             characteristics,
         ) = (
-            le_u32, le_u32, le_u32, le_u32, le_u32, le_u32, le_u16, le_u16, le_u32,
+            le_u32,
+            le_u32,
+            le_u32,
+            le_u32,
+            le_u32,
+            le_u32,
+            le_u16,
+            le_u16,
+            le_u32.verify_map(SectionCharacteristics::from_bits),
         )
             .parse_next(data)?;
 

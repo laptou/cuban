@@ -9,6 +9,7 @@ use winnow::prelude::*;
 use winnow::token::take;
 
 use crate::coff::{CoffFileHeader, CoffSectionHeader};
+use crate::flags::DllCharacteristics;
 use crate::parse::Parse;
 
 #[derive(Error, Debug)]
@@ -90,7 +91,7 @@ pub struct OptionalHeader {
     pub size_of_headers: u32,
     pub checksum: u32,
     pub subsystem: u16,
-    pub dll_characteristics: u16,
+    pub dll_characteristics: DllCharacteristics,
     pub size_of_stack_reserve: u64,
     pub size_of_stack_commit: u64,
     pub size_of_heap_reserve: u64,
@@ -134,7 +135,9 @@ impl<'a> Parse<'a> for OptionalHeader {
         let size_of_headers = le_u32.parse_next(input)?;
         let checksum = le_u32.parse_next(input)?;
         let subsystem = le_u16.parse_next(input)?;
-        let dll_characteristics = le_u16.parse_next(input)?;
+        let dll_characteristics = le_u16
+            .verify_map(DllCharacteristics::from_bits)
+            .parse_next(input)?;
 
         // PE32+ uses 64-bit fields
         let (
