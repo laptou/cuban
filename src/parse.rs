@@ -29,7 +29,7 @@ pub trait Parse<'a>: Sized {
 
 pub trait Write {
     type Error;
-    fn write(&self, out: &mut impl bytes::BufMut) -> Result<(), Self::Error>;
+    fn write(&self, out: &mut [u8]) -> Result<(), Self::Error>;
 }
 
 pub trait Layout {
