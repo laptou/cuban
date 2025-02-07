@@ -2,6 +2,7 @@
 
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
+use symbol_table::SymbolTableEntry;
 use thiserror::Error;
 use winnow::binary::le_u16;
 use winnow::binary::le_u32;
@@ -15,6 +16,8 @@ use winnow::token::take_while;
 
 use crate::parse::Lazy;
 use crate::parse::Parse;
+
+mod symbol_table;
 
 #[derive(Error, Debug)]
 pub enum CoffError<'a> {
@@ -160,18 +163,47 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
 pub struct CoffFile<'a> {
     pub file_header: CoffFileHeader,
     pub section_headers: Vec<CoffSectionHeader<'a>>,
+    pub symbol_table: Option<SymbolTable>,
+}
+
+pub struct SymbolTable {
+    pub entries: Vec<SymbolTableEntry>,
 }
 
 impl<'a> Parse<'a> for CoffFile<'a> {
     type Error = ContextError;
 
     fn parse(data: &mut &'a [u8]) -> Result<Self, Self::Error> {
+        let all_data = *data;
+
         let file_header = CoffFileHeader::parse(data)?;
-        let section_headers = repeat(0.., CoffSectionHeader::parse).parse_next(data)?;
+        let section_headers = repeat(
+            file_header.number_of_sections as usize,
+            CoffSectionHeader::parse,
+        )
+        .parse_next(data)?;
+
+        let symbol_table = if file_header.pointer_to_symbol_table > 0
+            && file_header.number_of_symbols > 0
+        {
+            let symbol_table_data = &mut &all_data[file_header.pointer_to_symbol_table as usize..];
+            let symbol_table_entries = repeat(
+                file_header.number_of_symbols as usize,
+                SymbolTableEntry::parse,
+            )
+            .parse_next(symbol_table_data)?;
+
+            Some(SymbolTable {
+                entries: symbol_table_entries,
+            })
+        } else {
+            None
+        };
 
         Ok(Self {
             file_header,
             section_headers,
+            symbol_table,
         })
     }
 }
