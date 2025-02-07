@@ -31,3 +31,8 @@ pub trait Write {
     type Error;
     fn write(&self, out: &mut impl bytes::BufMut) -> Result<(), Self::Error>;
 }
+
+pub trait Layout {
+    /// Updates any internal pointers and lengths, then returns the total size in bytes
+    fn fix_layout(&mut self) -> u32;
+}

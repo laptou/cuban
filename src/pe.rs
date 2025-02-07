@@ -12,7 +12,7 @@ use winnow::token::take;
 
 use crate::coff::relocations::CoffRelocation;
 use crate::coff::CoffSection;
-use crate::parse::Write;
+use crate::parse::{Layout, Write};
 
 use crate::coff::{
     string_table::StringTable,
@@ -41,6 +41,13 @@ pub enum PeError<'a> {
 pub struct DosHeader {
     /// File address of PE header
     pub e_lfanew: u32,
+}
+
+impl Layout for DosHeader {
+    fn fix_layout(&mut self) -> u32 {
+        // DOS header is fixed size: 2 bytes magic + 58 bytes stub + 4 bytes e_lfanew
+        64
+    }
 }
 
 impl Write for DosHeader {
@@ -80,6 +87,12 @@ impl<'a> Parse<'a> for DosHeader {
 pub struct DataDirectory {
     pub virtual_address: u32,
     pub size: u32,
+}
+
+impl Layout for DataDirectory {
+    fn fix_layout(&mut self) -> u32 {
+        8 // Fixed size: 4 bytes VA + 4 bytes size
+    }
 }
 
 impl Write for DataDirectory {
@@ -148,6 +161,29 @@ pub struct OptionalHeader {
 impl OptionalHeader {
     pub const MAGIC_PE32: u16 = 0x10;
     pub const MAGIC_PE32_PLUS: u16 = 0x20;
+}
+
+impl Layout for OptionalHeader {
+    fn fix_layout(&mut self) -> u32 {
+        let is_pe32_plus = self.magic == Self::MAGIC_PE32_PLUS;
+        
+        // Calculate base size without data directories
+        let base_size = if is_pe32_plus {
+            // PE32+ header size up to but not including data directories
+            112
+        } else {
+            // PE32 header size up to but not including data directories
+            96
+        };
+
+        // Calculate total size including data directories
+        let total_size = base_size + (self.data_directories.len() * 8) as u32;
+        
+        // Update number_of_rva_and_sizes
+        self.number_of_rva_and_sizes = self.data_directories.len() as u32;
+
+        total_size
+    }
 }
 
 impl Write for OptionalHeader {
