@@ -8,8 +8,7 @@ use winnow::binary::le_u16;
 use winnow::binary::le_u32;
 use winnow::combinator::fail;
 use winnow::combinator::repeat;
-use winnow::error::ContextError;
-use winnow::error::ParseError;
+use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 use winnow::token::take_while;
@@ -85,7 +84,7 @@ impl<'a> Parse<'a> for CoffFileHeader {
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
         let machine = le_u16
             .verify_map(|m| Machine::from_u16(m))
-            .context("machine")
+            .context(StrContext::Label("machine"))
             .parse_next(input)?;
 
         let (
@@ -136,11 +135,11 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
 
     fn parse(data: &mut &'a [u8]) -> Result<Self, Self::Error> {
         let mut name = take(8usize)
-            .context("name")
+            .context(StrContext::Label("name"))
             .parse_next(data)?;
         let name = take_while(0..8, |c| c != 0)
             .verify_map(|s| std::str::from_utf8(s).ok())
-            .context("name utf-8")
+            .context(StrContext::Label("name utf-8"))
             .parse_next(&mut name)?;
 
         let (
@@ -200,13 +199,13 @@ impl<'a> Parse<'a> for CoffFile<'a> {
         let all_data = *data;
 
         let file_header = CoffFileHeader::parse
-            .context("coff header")
+            .context(StrContext::Label("coff header"))
             .parse_next(data)?;
         let section_headers = repeat(
             file_header.number_of_sections as usize,
             CoffSectionHeader::parse,
         )
-        .context("sections")
+        .context(StrContext::Label("sections"))
         .parse_next(data)?;
 
         let symbol_table = if file_header.pointer_to_symbol_table > 0
