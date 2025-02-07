@@ -114,7 +114,7 @@ pub enum AuxSymbolRecord {
 impl Write for AuxSymbolRecord {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, out: &mut [u8]) -> Result<(), Self::Error> {
         match self {
             Self::Function {
                 tag_index,

@@ -53,7 +53,7 @@ impl Layout for DosHeader {
 impl Write for DosHeader {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, out: &mut [u8]) -> Result<(), Self::Error> {
         // Write DOS magic "MZ"
         out.put_slice(b"MZ");
         // Write 58 bytes of DOS stub

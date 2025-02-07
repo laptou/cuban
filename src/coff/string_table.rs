@@ -63,7 +63,7 @@ impl<'a> StringTable<'a> {
 impl<'a> Write for StringTable<'a> {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, out: &mut [u8]) -> Result<(), Self::Error> {
         // Write total size including the size field itself
         let total_size = (self.data.len() + 4) as u32;
         out.put_u32_le(total_size);
