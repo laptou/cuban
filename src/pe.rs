@@ -37,10 +37,10 @@ impl<'a> Parse<'a> for DosHeader {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        b"MZ".parse_next(input)?;
+        b"MZ".context("dos magic").parse_next(input)?;
         // Skip the rest of the DOS header fields
-        take(58usize).parse_next(input)?;
-        let e_lfanew = le_u32.parse_next(input)?;
+        take(58usize).context("dos header").parse_next(input)?;
+        let e_lfanew = le_u32.context("e_lfanew").parse_next(input)?;
 
         Ok(DosHeader { e_lfanew })
     }
@@ -56,8 +56,8 @@ impl<'a> Parse<'a> for DataDirectory {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let virtual_address = le_u32.parse_next(input)?;
-        let size = le_u32.parse_next(input)?;
+        let virtual_address = le_u32.context("virtual address").parse_next(input)?;
+        let size = le_u32.context("size").parse_next(input)?;
 
         Ok(DataDirectory {
             virtual_address,
@@ -217,21 +217,21 @@ impl<'a> Parse<'a> for PeFile<'a> {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let dos_header = DosHeader::parse(input)?;
+        let dos_header = DosHeader::parse.context("dos header").parse_next(input)?;
 
         // Skip to PE header using e_lfanew
         let pe_offset = dos_header.e_lfanew as usize;
-        take(pe_offset).parse_next(input)?;
+        take(pe_offset).context("pe header offset").parse_next(input)?;
 
         // Verify PE signature
-        b"PE\0\0".parse_next(input)?;
+        b"PE\0\0".context("pe magic").parse_next(input)?;
 
-        let coff_header = CoffFileHeader::parse(input)?;
-        let optional_header = OptionalHeader::parse(input)?;
+        let coff_header = CoffFileHeader::parse.context("coff header").parse_next(input)?;
+        let optional_header = OptionalHeader::parse.context("optional header").parse_next(input)?;
 
         let mut section_headers = Vec::new();
         for _ in 0..coff_header.number_of_sections {
-            section_headers.push(CoffSectionHeader::parse(input)?);
+            section_headers.push(CoffSectionHeader::parse.context("section header").parse_next(input)?);
         }
 
         Ok(PeFile {
