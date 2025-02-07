@@ -27,7 +27,7 @@ fn process_section_relocations<'a>(
     section_alignment: u32,
     file_alignment: u32,
     section_rva: u64,
-    section_vas: &[(i16, u64)], // (section_number, va) pairs
+    all_sections: &[CoffSection<'a>],
 ) -> anyhow::Result<()> {
     // Skip if no relocations
     if section.relocations.is_empty() {
@@ -50,13 +50,12 @@ fn process_section_relocations<'a>(
             bail!("Cannot relocate to undefined symbol {}", symbol.name);
         }
 
-        // Look up target section's VA
-        let target_va = section_vas.iter()
-            .find(|(num, _)| *num == target_section)
-            .map(|(_, va)| *va)
+        // Look up target section's VA from its header
+        let target_section = all_sections.iter()
+            .find(|s| s.header.section_number == target_section)
             .context("Target section not found")?;
             
-        let target_address = image_base + target_va + symbol.entry.value as u64;
+        let target_address = image_base + target_section.header.virtual_address as u64 + symbol.entry.value as u64;
 
         // Apply relocation at offset
         match reloc.type_ {
@@ -99,38 +98,33 @@ fn process_all_relocations<'a>(
     section_alignment: u32,
     file_alignment: u32,
 ) -> anyhow::Result<()> {
-    // Calculate virtual addresses for all sections
+    // Calculate and store virtual addresses in section headers
     let mut current_va = 0u64;
-    let mut section_vas = Vec::new();
     
-    for (idx, section) in sections.iter().enumerate() {
+    for section in sections.iter_mut() {
         // Align VA to section alignment
         current_va = (current_va + section_alignment as u64 - 1) & !(section_alignment as u64 - 1);
         
-        // Store section number (1-based) and VA
-        section_vas.push((idx as i16 + 1, current_va));
+        // Store VA in section header
+        section.header.virtual_address = current_va as u32;
         
-        // Add section size (if any) for next calculation
+        // Set virtual size equal to raw data size for now
         if let Some(data) = &section.data {
+            section.header.virtual_size = data.len() as u32;
             current_va += data.len() as u64;
         }
     }
 
-    // Process relocations with calculated VAs
+    // Process relocations using VAs from headers
     for section in sections.iter_mut() {
-        let section_va = section_vas.iter()
-            .find(|(num, _)| *num == section.header.section_number)
-            .map(|(_, va)| *va)
-            .context("Section VA not found")?;
-
         process_section_relocations(
             section,
             global_symbols,
             image_base,
-            section_alignment,
+            section_alignment, 
             file_alignment,
-            section_va,
-            &section_vas
+            section.header.virtual_address as u64,
+            sections
         )?;
     }
     Ok(())
