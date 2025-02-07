@@ -19,7 +19,7 @@ use crate::coff::{
     symbol_table::{SymbolTable, SymbolTableEntry},
     CoffFileHeader, CoffSectionHeader,
 };
-use crate::flags::DllCharacteristics;
+use crate::flags::{DllCharacteristics, Subsystem};
 use crate::parse::Parse;
 
 #[derive(Error, Debug)]
@@ -134,7 +134,7 @@ pub struct OptionalHeader {
     pub size_of_image: u32,
     pub size_of_headers: u32,
     pub checksum: u32,
-    pub subsystem: u16,
+    pub subsystem: Subsystem,
     pub dll_characteristics: DllCharacteristics,
     pub size_of_stack_reserve: u64,
     pub size_of_stack_commit: u64,
@@ -183,7 +183,7 @@ impl Write for OptionalHeader {
         out.put_u32_le(self.size_of_image);
         out.put_u32_le(self.size_of_headers);
         out.put_u32_le(self.checksum);
-        out.put_u16_le(self.subsystem);
+        out.put_u16_le(self.subsystem as u16);
         out.put_u16_le(self.dll_characteristics.bits());
 
         if is_pe32_plus {
@@ -242,7 +242,9 @@ impl<'a> Parse<'a> for OptionalHeader {
         let size_of_image = le_u32.parse_next(input)?;
         let size_of_headers = le_u32.parse_next(input)?;
         let checksum = le_u32.parse_next(input)?;
-        let subsystem = le_u16.parse_next(input)?;
+        let subsystem = le_u16
+            .verify_map(Subsystem::from_u16)
+            .parse_next(input)?;
         let dll_characteristics = le_u16
             .verify_map(DllCharacteristics::from_bits)
             .parse_next(input)?;
