@@ -55,7 +55,6 @@ fn process_section_relocations<'a>(
             bail!("cannot relocate to undefined symbol {}", symbol.name);
         }
 
-        
         // Look up target section's VA from its header
         let target_section = all_sections
             .iter()
@@ -187,27 +186,28 @@ fn main() -> anyhow::Result<()> {
     let global_symbols = collect_global_symbols(&object_files)?;
     dbg!(&global_symbols);
 
-    let sections = object_files
+    let mut sections = object_files
         .iter()
         .flat_map(|o| o.sections.clone())
         .collect_vec();
 
-    let mut merged_sections = order_and_merge_sections(sections)?;
+    process_all_relocations(
+        &mut sections,
+        &global_symbols,
+        0x400000, // Image base
+        0x1000,   // Section alignment
+    )?;
+
+    let merged_sections = order_and_merge_sections(sections)?;
     let (code_size, init_data_size, uninit_data_size) = count_section_totals(&merged_sections);
+
+    dbg!(&merged_sections);
 
     let package_version = clap::crate_version!();
     let (package_major_version, package_minor_version, _) =
         package_version.splitn(3, '.').collect_tuple().unwrap();
     let package_major_version = u8::from_str(package_major_version).unwrap();
     let package_minor_version = u8::from_str(package_minor_version).unwrap();
-
-    // Process relocations before creating PE file
-    process_all_relocations(
-        &mut merged_sections,
-        &global_symbols,
-        0x400000, // Image base
-        0x1000,   // Section alignment
-    )?;
 
     let mut pe_file = PeFile {
         dos_header: DosHeader { e_lfanew: 0 },
