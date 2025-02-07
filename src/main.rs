@@ -2,7 +2,8 @@ use std::{borrow::Cow, cmp::Ordering, path::PathBuf, str::FromStr, time::Instant
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use coff::CoffFile;
+use coff::{CoffFile, CoffSection};
+use coff::relocations::RelocationType;
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
 use parse::Parse;
@@ -17,6 +18,96 @@ mod util;
 #[derive(Parser)]
 struct Cli {
     input_files: Vec<PathBuf>,
+}
+
+fn process_section_relocations<'a>(
+    section: &mut CoffSection<'a>,
+    global_symbols: &GlobalSymbolTable<'a>,
+    image_base: u64,
+    section_alignment: u32,
+    file_alignment: u32,
+    section_idx: usize,
+) -> anyhow::Result<()> {
+    // Skip if no relocations
+    if section.relocations.is_empty() {
+        return Ok(());
+    }
+
+    // Section must have data to relocate
+    let data = section.data.as_mut()
+        .context("Section has relocations but no data")?;
+
+    // Calculate section's virtual address (aligned to section_alignment)
+    let section_rva = ((section_idx + 1) as u32 * section_alignment) as u64;
+    
+    // Process each relocation
+    for reloc in &section.relocations {
+        // Get the symbol being referenced
+        let symbol = global_symbols.get_by_index(section.id.object_idx, reloc.symbol_table_index as usize)
+            .context("Invalid symbol reference in relocation")?;
+        
+        // Get target section number (1-based)
+        let target_section = symbol.entry.section_number;
+        if target_section <= 0 {
+            bail!("Cannot relocate to undefined symbol {}", symbol.name);
+        }
+
+        // Calculate target address
+        let target_rva = ((target_section as usize) * section_alignment as usize) as u64;
+        let target_address = image_base + target_rva + symbol.entry.value as u64;
+
+        // Apply relocation at offset
+        match reloc.type_ {
+            RelocationType::Absolute => {
+                // No-op relocation
+            }
+            RelocationType::Dir32 => {
+                // Write 32-bit VA 
+                let offset = reloc.virtual_address as usize;
+                let value = target_address as u32;
+                data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            RelocationType::Dir32NB => {
+                // Write 32-bit RVA (relative to image base)
+                let offset = reloc.virtual_address as usize;
+                let value = (target_address - image_base) as u32;
+                data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            RelocationType::Rel32 => {
+                // Write 32-bit relative offset from next instruction
+                let offset = reloc.virtual_address as usize;
+                let source_va = image_base + section_rva + (offset as u64 + 4);
+                let value = ((target_address as i64) - (source_va as i64)) as u32;
+                data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            _ => bail!("Unsupported relocation type {:?}", reloc.type_),
+        }
+    }
+
+    // Clear relocations after processing
+    section.relocations.clear();
+    
+    Ok(())
+}
+
+fn process_all_relocations<'a>(
+    sections: &mut [CoffSection<'a>],
+    global_symbols: &GlobalSymbolTable<'a>,
+    image_base: u64,
+    section_alignment: u32,
+    file_alignment: u32,
+) -> anyhow::Result<()> {
+    for (idx, section) in sections.iter_mut().enumerate() {
+        process_section_relocations(
+            section,
+            global_symbols,
+            image_base,
+            section_alignment,
+            file_alignment,
+            idx
+        )?;
+    }
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -58,6 +149,15 @@ fn main() -> anyhow::Result<()> {
         package_version.splitn(3, '.').collect_tuple().unwrap();
     let package_major_version = u8::from_str(package_major_version).unwrap();
     let package_minor_version = u8::from_str(package_minor_version).unwrap();
+
+    // Process relocations before creating PE file
+    process_all_relocations(
+        &mut merged_sections,
+        &global_symbols,
+        0x400000, // Image base
+        0x1000,   // Section alignment
+        0x200     // File alignment
+    )?;
 
     let pe_file = PeFile {
         dos_header: DosHeader { e_lfanew: 0 },
