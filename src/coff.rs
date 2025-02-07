@@ -184,11 +184,16 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct CoffSection<'a> {
+    pub header: CoffSectionHeader<'a>,
+    pub relocations: Vec<CoffRelocation>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CoffFile<'a> {
-    pub file_header: CoffFileHeader,
-    pub section_headers: Vec<CoffSectionHeader<'a>>,
+    pub header: CoffFileHeader,
+    pub sections: Vec<CoffSection<'a>>,
     pub symbol_table: Option<SymbolTable>,
-    pub relocations: Vec<Vec<CoffRelocation>>, // One Vec of relocations per section
 }
 
 #[derive(Debug, Clone)]
@@ -206,38 +211,41 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             .context(StrContext::Label("coff header"))
             .parse_next(data)?;
 
-        let section_headers = repeat(
+        let section_headers: Vec<_> = repeat(
             file_header.number_of_sections as usize,
             CoffSectionHeader::parse,
         )
         .context(StrContext::Label("sections"))
         .parse_next(data)?;
 
-        dbg!(&file_header);
-        dbg!(&section_headers);
+        let mut sections: Vec<_> = section_headers
+            .into_iter()
+            .map(|header| CoffSection {
+                header,
+                relocations: vec![],
+            })
+            .collect();
 
         // Parse relocations for each section
-        let mut relocations = Vec::with_capacity(section_headers.len());
-        for section in &section_headers {
-            if section.number_of_relocations > 0 {
-                let reloc_data = &mut &all_data[section.pointer_to_relocations as usize..];
-                let section_relocs = repeat(
-                    section.number_of_relocations as usize,
+        for section in &mut sections {
+            if section.header.number_of_relocations > 0 && section.header.pointer_to_relocations > 0
+            {
+                let reloc_data = &mut &all_data[section.header.pointer_to_relocations as usize..];
+
+                let section_relocs: Vec<_> = repeat(
+                    section.header.number_of_relocations as usize,
                     CoffRelocation::parse,
                 )
                 .context(StrContext::Label("relocations"))
                 .parse_next(reloc_data)?;
-                relocations.push(section_relocs);
-            } else {
-                relocations.push(Vec::new());
+
+                section.relocations.extend(section_relocs);
             }
         }
 
         let symbol_table = if file_header.pointer_to_symbol_table > 0
             && file_header.number_of_symbols > 0
         {
-            dbg!(file_header.number_of_symbols);
-
             let symbol_table_data = &mut &all_data[file_header.pointer_to_symbol_table as usize..];
             // auxiliary symbol table entries count against the total number of symbols
             let mut i = 0;
@@ -261,10 +269,9 @@ impl<'a> Parse<'a> for CoffFile<'a> {
         };
 
         Ok(Self {
-            file_header,
-            section_headers,
+            header: file_header,
+            sections,
             symbol_table,
-            relocations,
         })
     }
 }
