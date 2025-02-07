@@ -118,13 +118,22 @@ impl Layout for SymbolTableEntry {
     }
 
     fn total_size(&self) -> u32 {
-        return 18 + self.number_of_aux_symbols as u32 * 18;
+        18 + (self.aux_symbols.len() as u32 * 18) // Each symbol is 18 bytes
     }
 }
 
 impl Layout for SymbolTable {
+    fn fix_layout(&mut self) -> u32 {
+        // Fix layout of all entries
+        let mut total = 0;
+        for entry in &mut self.entries {
+            total += entry.fix_layout();
+        }
+        total
+    }
+
     fn total_size(&self) -> u32 {
-        return self.entries.iter().map(|e| e.total_size()).sum();
+        self.entries.iter().map(|e| e.total_size()).sum()
     }
 }
 

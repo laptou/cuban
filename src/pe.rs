@@ -45,7 +45,7 @@ pub struct DosHeader {
 }
 
 impl Layout for DosHeader {
-    fn fix_layout(&mut self) -> u32 {
+    fn total_size(&self) -> u32 {
         // DOS header is fixed size: 2 bytes magic + 58 bytes stub + 4 bytes e_lfanew
         64
     }
@@ -91,7 +91,7 @@ pub struct DataDirectory {
 }
 
 impl Layout for DataDirectory {
-    fn fix_layout(&mut self) -> u32 {
+    fn total_size(&self) -> u32 {
         8 // Fixed size: 4 bytes VA + 4 bytes size
     }
 }
