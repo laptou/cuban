@@ -1,12 +1,14 @@
 use std::borrow::Cow;
+use std::str::FromStr;
 
 use bytes::BufMut;
 use winnow::{
+    ascii::digit1,
     binary::{le_u16, le_u32},
-    combinator::repeat,
+    combinator::{self, alt, preceded, repeat},
     error::{ContextError, StrContext},
     prelude::*,
-    token::take,
+    token::{one_of, take, take_until},
 };
 
 use crate::parse::{Layout, Parse, Write};
@@ -61,7 +63,7 @@ pub struct FirstLinkerMember<'a> {
     pub symbols: Vec<(u32, Cow<'a, str>)>, // (offset, name) pairs
 }
 
-#[derive(Debug, Clone)] 
+#[derive(Debug, Clone)]
 pub struct SecondLinkerMember<'a> {
     pub member_offsets: Vec<u32>,
     pub symbols: Vec<(u16, Cow<'a, str>)>, // (index, name) pairs
@@ -101,11 +103,13 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
 
             match &member.header.name {
                 ArchiveMemberName::FirstLinker => {
-                    let linker = FirstLinkerMember::parse_with_size(member.data.len(), &mut &*member.data)?;
+                    let linker =
+                        FirstLinkerMember::parse_with_size(member.data.len(), &mut &*member.data)?;
                     first_linker = Some(linker);
                 }
                 ArchiveMemberName::SecondLinker => {
-                    let linker = SecondLinkerMember::parse_with_size(member.data.len(), &mut &*member.data)?;
+                    let linker =
+                        SecondLinkerMember::parse_with_size(member.data.len(), &mut &*member.data)?;
                     second_linker = Some(linker);
                 }
                 ArchiveMemberName::Longnames => {
@@ -153,68 +157,64 @@ impl<'a> Parse<'a> for ArchiveMemberHeader<'a> {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let name_bytes = take(16usize)
+        let mut name_bytes = take(16usize)
             .context(StrContext::Label("member name"))
             .parse_next(input)?;
 
-        let name = if name_bytes == FIRST_LINKER {
-            ArchiveMemberName::FirstLinker
-        } else if name_bytes == SECOND_LINKER {
-            ArchiveMemberName::SecondLinker
-        } else if name_bytes == LONGNAMES_MEMBER {
-            ArchiveMemberName::Longnames
-        } else if name_bytes.starts_with(b"/") {
-            // Long name - number after / is offset into longnames member
-            let offset_str = std::str::from_utf8(&name_bytes[1..])
-                .map_err(|_| ContextError::context("invalid long name offset", input, StrContext::Label("long name")))?
-                .trim_end();
-            let offset = offset_str.parse::<u32>()
-                .map_err(|_| ContextError::context("invalid long name offset", input, StrContext::Label("long name")))?;
-            ArchiveMemberName::LongName(offset)
-        } else {
-            // Regular name
-            let len = name_bytes.iter().position(|&b| b == b'/' || b == b' ').unwrap_or(16);
-            let name = std::str::from_utf8(&name_bytes[..len])
-                .map_err(|_| ContextError::context("invalid member name", input, StrContext::Label("member name")))?;
-            ArchiveMemberName::Name(Cow::Borrowed(name))
-        };
+        let name = alt((
+            FIRST_LINKER_MEMBER.map(|_| ArchiveMemberName::FirstLinker),
+            SECOND_LINKER_MEMBER.map(|_| ArchiveMemberName::SecondLinker),
+            LONGNAMES_MEMBER.map(|_| ArchiveMemberName::Longnames),
+            preceded(b"/", digit1)
+                .try_map(std::str::from_utf8)
+                .try_map(u32::from_str)
+                .map(ArchiveMemberName::LongName),
+            take_until(..16, b'/')
+                .try_map(std::str::from_utf8)
+                .map(Cow::Borrowed)
+                .map(ArchiveMemberName::Name),
+        ))
+        .parse_next(&mut name_bytes)?;
 
         let date = take(12usize)
-            .verify_map(|s: &[u8]| std::str::from_utf8(s).ok()?.trim().parse::<u32>().ok())
+            .try_map(std::str::from_utf8)
+            .map(str::trim)
+            .try_map(u32::from_str)
             .context(StrContext::Label("date"))
             .parse_next(input)?;
 
         let user_id = take(6usize)
-            .verify_map(|s: &[u8]| std::str::from_utf8(s).ok()?.trim().parse::<u16>().ok())
+            .try_map(std::str::from_utf8)
+            .map(str::trim)
+            .try_map(u16::from_str)
             .context(StrContext::Label("user id"))
             .parse_next(input)?;
 
         let group_id = take(6usize)
-            .verify_map(|s: &[u8]| std::str::from_utf8(s).ok()?.trim().parse::<u16>().ok())
+            .try_map(std::str::from_utf8)
+            .map(str::trim)
+            .try_map(u16::from_str)
             .context(StrContext::Label("group id"))
             .parse_next(input)?;
 
         let mode = take(8usize)
-            .verify_map(|s: &[u8]| std::str::from_utf8(s).ok()?.trim().parse::<u32>().ok())
+            .try_map(std::str::from_utf8)
+            .map(str::trim)
+            .try_map(u32::from_str)
             .context(StrContext::Label("mode"))
             .parse_next(input)?;
 
         let size = take(10usize)
-            .verify_map(|s: &[u8]| std::str::from_utf8(s).ok()?.trim().parse::<u32>().ok())
+            .try_map(std::str::from_utf8)
+            .map(str::trim)
+            .try_map(u32::from_str)
             .context(StrContext::Label("size"))
             .parse_next(input)?;
 
         // Check ending characters
-        let end = take(2usize)
+        let end = b"`\n"
             .context(StrContext::Label("header end"))
             .parse_next(input)?;
-        if end != b"`\n" {
-            return Err(ContextError::context(
-                "invalid header end",
-                input,
-                StrContext::Label("header end"),
-            ));
-        }
 
         Ok(ArchiveMemberHeader {
             name,
@@ -243,13 +243,21 @@ impl<'a> FirstLinkerMember<'a> {
         let mut string_data = *input;
 
         for offset in offsets {
-            let name_end = string_data
-                .iter()
-                .position(|&b| b == 0)
-                .ok_or_else(|| ContextError::context("unterminated string", input, StrContext::Label("symbol name")))?;
+            let name_end = string_data.iter().position(|&b| b == 0).ok_or_else(|| {
+                ContextError::context(
+                    "unterminated string",
+                    input,
+                    StrContext::Label("symbol name"),
+                )
+            })?;
 
-            let name = std::str::from_utf8(&string_data[..name_end])
-                .map_err(|_| ContextError::context("invalid symbol name", input, StrContext::Label("symbol name")))?;
+            let name = std::str::from_utf8(&string_data[..name_end]).map_err(|_| {
+                ContextError::context(
+                    "invalid symbol name",
+                    input,
+                    StrContext::Label("symbol name"),
+                )
+            })?;
 
             symbols.push((offset, Cow::Borrowed(name)));
             string_data = &string_data[name_end + 1..];
@@ -285,13 +293,21 @@ impl<'a> SecondLinkerMember<'a> {
         let mut string_data = *input;
 
         for index in indices {
-            let name_end = string_data
-                .iter()
-                .position(|&b| b == 0)
-                .ok_or_else(|| ContextError::context("unterminated string", input, StrContext::Label("symbol name")))?;
+            let name_end = string_data.iter().position(|&b| b == 0).ok_or_else(|| {
+                ContextError::context(
+                    "unterminated string",
+                    input,
+                    StrContext::Label("symbol name"),
+                )
+            })?;
 
-            let name = std::str::from_utf8(&string_data[..name_end])
-                .map_err(|_| ContextError::context("invalid symbol name", input, StrContext::Label("symbol name")))?;
+            let name = std::str::from_utf8(&string_data[..name_end]).map_err(|_| {
+                ContextError::context(
+                    "invalid symbol name",
+                    input,
+                    StrContext::Label("symbol name"),
+                )
+            })?;
 
             symbols.push((index, Cow::Borrowed(name)));
             string_data = &string_data[name_end + 1..];
