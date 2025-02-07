@@ -25,6 +25,7 @@ pub mod relocations;
 pub mod sections;
 pub mod string_table;
 pub mod symbol_table;
+pub mod archive;
 
 use relocations::{CoffRelocation, RelocationType};
 
