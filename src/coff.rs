@@ -20,6 +20,46 @@ use crate::parse::Parse;
 mod relocations;
 mod symbol_table;
 
+#[derive(Debug, Clone)]
+pub struct StringTable<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> StringTable<'a> {
+    pub fn get(&self, offset: u32) -> Option<&'a str> {
+        if offset as usize >= self.data.len() {
+            return None;
+        }
+        
+        let str_bytes = &self.data[offset as usize..];
+        let len = str_bytes.iter()
+            .position(|&b| b == 0)
+            .unwrap_or(str_bytes.len());
+            
+        std::str::from_utf8(&str_bytes[..len]).ok()
+    }
+}
+
+impl<'a> Parse<'a> for StringTable<'a> {
+    type Error = ContextError;
+    
+    fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
+        let total_size = le_u32
+            .context(StrContext::Label("string table size"))
+            .parse_next(input)?;
+            
+        if total_size < 4 {
+            return Ok(StringTable { data: &[] });
+        }
+        
+        let data = take(total_size as usize - 4)
+            .context(StrContext::Label("string table data"))
+            .parse_next(input)?;
+            
+        Ok(StringTable { data })
+    }
+}
+
 use relocations::{CoffRelocation, RelocationType};
 
 #[derive(Error, Debug)]
@@ -194,6 +234,7 @@ pub struct CoffFile<'a> {
     pub header: CoffFileHeader,
     pub sections: Vec<CoffSection<'a>>,
     pub symbol_table: Option<SymbolTable>,
+    pub string_table: Option<StringTable<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -243,7 +284,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             }
         }
 
-        let symbol_table = if file_header.pointer_to_symbol_table > 0
+        let (symbol_table, string_table) = if file_header.pointer_to_symbol_table > 0
             && file_header.number_of_symbols > 0
         {
             let symbol_table_data = &mut &all_data[file_header.pointer_to_symbol_table as usize..];
@@ -261,17 +302,31 @@ impl<'a> Parse<'a> for CoffFile<'a> {
                 symbol_table_entries.push(entry);
             }
 
-            Some(SymbolTable {
+            let symbol_table = Some(SymbolTable {
                 entries: symbol_table_entries,
-            })
+            });
+
+            // String table follows symbol table
+            let symbol_table_size = file_header.number_of_symbols as usize * 18;
+            let string_table_offset = file_header.pointer_to_symbol_table as usize + symbol_table_size;
+            
+            let string_table = if string_table_offset < all_data.len() {
+                let string_table_data = &mut &all_data[string_table_offset..];
+                Some(StringTable::parse(string_table_data)?)
+            } else {
+                None
+            };
+
+            (symbol_table, string_table)
         } else {
-            None
+            (None, None)
         };
 
         Ok(Self {
             header: file_header,
             sections,
             symbol_table,
+            string_table,
         })
     }
 }
