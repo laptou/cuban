@@ -14,9 +14,9 @@ use crate::parse::Parse;
 
 #[derive(Error, Debug)]
 pub enum PeError<'a> {
-    #[error("invalid DOS magic number")]
+    #[error("invalid dos magic")]
     InvalidDosMagic,
-    #[error("invalid PE magic number")]
+    #[error("invalid pe magic")]
     InvalidPeMagic,
     #[error("parse error: {0}")]
     Context(ContextError),
