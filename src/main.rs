@@ -26,7 +26,8 @@ fn process_section_relocations<'a>(
     image_base: u64,
     section_alignment: u32,
     file_alignment: u32,
-    section_idx: usize,
+    section_rva: u64,
+    section_vas: &[(i16, u64)], // (section_number, va) pairs
 ) -> anyhow::Result<()> {
     // Skip if no relocations
     if section.relocations.is_empty() {
@@ -36,9 +37,6 @@ fn process_section_relocations<'a>(
     // Section must have data to relocate
     let data = section.data.as_mut()
         .context("Section has relocations but no data")?;
-
-    // Calculate section's virtual address (aligned to section_alignment)
-    let section_rva = ((section_idx + 1) as u32 * section_alignment) as u64;
     
     // Process each relocation
     for reloc in &section.relocations {
@@ -52,9 +50,13 @@ fn process_section_relocations<'a>(
             bail!("Cannot relocate to undefined symbol {}", symbol.name);
         }
 
-        // Calculate target address
-        let target_rva = ((target_section as usize) * section_alignment as usize) as u64;
-        let target_address = image_base + target_rva + symbol.entry.value as u64;
+        // Look up target section's VA
+        let target_va = section_vas.iter()
+            .find(|(num, _)| *num == target_section)
+            .map(|(_, va)| *va)
+            .context("Target section not found")?;
+            
+        let target_address = image_base + target_va + symbol.entry.value as u64;
 
         // Apply relocation at offset
         match reloc.type_ {
@@ -97,14 +99,38 @@ fn process_all_relocations<'a>(
     section_alignment: u32,
     file_alignment: u32,
 ) -> anyhow::Result<()> {
-    for (idx, section) in sections.iter_mut().enumerate() {
+    // Calculate virtual addresses for all sections
+    let mut current_va = 0u64;
+    let mut section_vas = Vec::new();
+    
+    for (idx, section) in sections.iter().enumerate() {
+        // Align VA to section alignment
+        current_va = (current_va + section_alignment as u64 - 1) & !(section_alignment as u64 - 1);
+        
+        // Store section number (1-based) and VA
+        section_vas.push((idx as i16 + 1, current_va));
+        
+        // Add section size (if any) for next calculation
+        if let Some(data) = &section.data {
+            current_va += data.len() as u64;
+        }
+    }
+
+    // Process relocations with calculated VAs
+    for section in sections.iter_mut() {
+        let section_va = section_vas.iter()
+            .find(|(num, _)| *num == section.header.section_number)
+            .map(|(_, va)| *va)
+            .context("Section VA not found")?;
+
         process_section_relocations(
             section,
             global_symbols,
             image_base,
             section_alignment,
             file_alignment,
-            idx
+            section_va,
+            &section_vas
         )?;
     }
     Ok(())
