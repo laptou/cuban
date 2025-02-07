@@ -42,6 +42,9 @@ fn main() -> anyhow::Result<()> {
 
     println!("{object_files:#?}");
 
+    // Collect all symbols into global symbol table
+    let mut global_symbols = collect_global_symbols(&object_files)?;
+
     let sections = object_files
         .iter()
         .flat_map(|o| o.sections.clone())
@@ -143,6 +146,16 @@ fn count_section_totals(merged_sections: &[coff::CoffSection<'_>]) -> (u32, u32,
     }
 
     (code_size, init_data_size, uninit_data_size)
+}
+
+fn collect_global_symbols(object_files: &[CoffFile]) -> anyhow::Result<GlobalSymbolTable> {
+    let mut global_symbols = GlobalSymbolTable::new();
+
+    for (idx, obj_file) in object_files.iter().enumerate() {
+        global_symbols.add(&obj_file.symbol_table, obj_file.string_table.as_ref(), idx)?;
+    }
+
+    Ok(global_symbols)
 }
 
 fn order_and_merge_sections(
