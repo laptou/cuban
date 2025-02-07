@@ -10,7 +10,10 @@ use winnow::{
     token::take,
 };
 
-use crate::parse::Parse;
+use crate::{
+    parse::Parse,
+    util::fmt::{byte_str_format, ByteStr},
+};
 
 #[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
@@ -66,17 +69,7 @@ pub enum Name {
 impl std::fmt::Debug for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Short(inner) => {
-                write!(f, "Short(\"")?;
-                for &byte in inner {
-                    if byte.is_ascii_graphic() || byte == b' ' {
-                        write!(f, "{}", byte as char)?;
-                    } else {
-                        write!(f, "\\x{:02x}", byte)?;
-                    }
-                }
-                write!(f, "\")")
-            }
+            Self::Short(inner) => f.debug_tuple("Short").field(&ByteStr(inner)).finish(),
             Self::Long(arg0) => f.debug_tuple("Long").field(arg0).finish(),
         }
     }

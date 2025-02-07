@@ -9,6 +9,7 @@ mod coff;
 mod flags;
 mod parse;
 mod pe;
+mod util;
 
 #[derive(Parser)]
 struct Cli {

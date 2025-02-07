@@ -1,7 +1,10 @@
 //! Parser for Common Object File Format (COFF).
 
+use std::borrow::Cow;
+
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
+use string_table::StringTable;
 use symbol_table::SymbolTableEntry;
 use thiserror::Error;
 use winnow::binary::le_u16;
@@ -18,47 +21,9 @@ use crate::flags::SectionCharacteristics;
 use crate::parse::Parse;
 
 mod relocations;
+mod sections;
 mod symbol_table;
-
-#[derive(Debug, Clone)]
-pub struct StringTable<'a> {
-    data: &'a [u8],
-}
-
-impl<'a> StringTable<'a> {
-    pub fn get(&self, offset: u32) -> Option<&'a str> {
-        if offset as usize >= self.data.len() {
-            return None;
-        }
-        
-        let str_bytes = &self.data[offset as usize..];
-        let len = str_bytes.iter()
-            .position(|&b| b == 0)
-            .unwrap_or(str_bytes.len());
-            
-        std::str::from_utf8(&str_bytes[..len]).ok()
-    }
-}
-
-impl<'a> Parse<'a> for StringTable<'a> {
-    type Error = ContextError;
-    
-    fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let total_size = le_u32
-            .context(StrContext::Label("string table size"))
-            .parse_next(input)?;
-            
-        if total_size < 4 {
-            return Ok(StringTable { data: &[] });
-        }
-        
-        let data = take(total_size as usize - 4)
-            .context(StrContext::Label("string table data"))
-            .parse_next(input)?;
-            
-        Ok(StringTable { data })
-    }
-}
+mod string_table;
 
 use relocations::{CoffRelocation, RelocationType};
 
@@ -161,7 +126,7 @@ impl<'a> Parse<'a> for CoffFileHeader {
 
 #[derive(Debug, Clone)]
 pub struct CoffSectionHeader<'a> {
-    pub name: &'a str,
+    pub name: Cow<'a, str>,
     pub virtual_size: u32,
     pub virtual_address: u32,
     pub size_of_raw_data: u32,
@@ -209,7 +174,7 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
             .parse_next(data)?;
 
         Ok(Self {
-            name,
+            name: name.into(),
             virtual_size,
             virtual_address,
             size_of_raw_data,
