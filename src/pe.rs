@@ -361,6 +361,64 @@ pub struct PeFile<'a> {
     pub string_table: Option<StringTable<'a>>,
 }
 
+impl<'a> Layout for PeFile<'a> {
+    fn fix_layout(&mut self) -> u32 {
+        // Start with DOS header size
+        let dos_header_size = self.dos_header.fix_layout();
+        
+        // Calculate PE header offset - must be aligned to 8 bytes
+        let pe_header_offset = (dos_header_size + 7) & !7;
+        self.dos_header.e_lfanew = pe_header_offset;
+
+        // PE signature (4 bytes) + COFF header (20 bytes)
+        let mut current_offset = pe_header_offset + 24;
+
+        // Fix optional header layout
+        let optional_header_size = self.optional_header.fix_layout();
+        self.coff_header.size_of_optional_header = optional_header_size as u16;
+        current_offset += optional_header_size;
+
+        // Section headers (40 bytes each)
+        let section_headers_size = (self.sections.len() * 40) as u32;
+        current_offset += section_headers_size;
+
+        // Update section data offsets and sizes
+        let mut data_offset = current_offset;
+        for section in &mut self.sections {
+            if let Some(data) = section.data {
+                section.header.pointer_to_raw_data = data_offset;
+                section.header.size_of_raw_data = data.len() as u32;
+                data_offset += section.header.size_of_raw_data;
+                
+                // Add space for relocations if any
+                if !section.relocations.is_empty() {
+                    section.header.pointer_to_relocations = data_offset;
+                    section.header.number_of_relocations = section.relocations.len() as u16;
+                    data_offset += (section.relocations.len() * 10) as u32; // Each relocation is 10 bytes
+                }
+            }
+        }
+
+        // Update COFF header fields
+        self.coff_header.number_of_sections = self.sections.len() as u16;
+
+        // Calculate symbol table offset if present
+        if let Some(symbol_table) = &self.symbol_table {
+            self.coff_header.pointer_to_symbol_table = data_offset;
+            self.coff_header.number_of_symbols = symbol_table.entries.iter()
+                .map(|e| 1 + e.number_of_aux_symbols as u32)
+                .sum();
+            data_offset += self.coff_header.number_of_symbols * 18; // Each symbol is 18 bytes
+        }
+
+        // Update optional header fields
+        self.optional_header.size_of_headers = current_offset;
+        self.optional_header.size_of_image = data_offset;
+
+        data_offset
+    }
+}
+
 impl<'a> Write for PeFile<'a> {
     type Error = std::io::Error;
 
