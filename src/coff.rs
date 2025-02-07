@@ -177,12 +177,14 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CoffFile<'a> {
     pub file_header: CoffFileHeader,
     pub section_headers: Vec<CoffSectionHeader<'a>>,
     pub symbol_table: Option<SymbolTable>,
 }
 
+#[derive(Debug, Clone)]
 pub struct SymbolTable {
     pub entries: Vec<SymbolTableEntry>,
 }
