@@ -22,11 +22,11 @@ impl<'a> Parse<'a> for CoffRelocation {
         let virtual_address = le_u32.parse_next(input)?;
         let symbol_table_index = le_u32.parse_next(input)?;
         let type_raw = le_u16.parse_next(input)?;
-        
+
         // Get machine type from context to determine relocation type enum
         // For now just parse as x64 relocations
-        let relocation_type = I386RelocationType::from_u16(type_raw)
-            .unwrap_or(I386RelocationType::Absolute);
+        let relocation_type =
+            I386RelocationType::from_u16(type_raw).unwrap_or(I386RelocationType::Absolute);
 
         Ok(CoffRelocation {
             virtual_address,

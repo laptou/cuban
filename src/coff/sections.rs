@@ -1,5 +1,4 @@
-use crate::parse::{Parse, Write};
-use bytes::BufMut;
+use crate::parse::Parse;
 use winnow::{
     binary::{le_u16, le_u32, le_u64},
     error::ContextError,
@@ -147,8 +146,8 @@ impl<'a> Parse<'a> for ExceptionDirectory {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let (begin_address, end_address, unwind_info_address) = (le_u32, le_u32, le_u32)
-            .parse_next(input)?;
+        let (begin_address, end_address, unwind_info_address) =
+            (le_u32, le_u32, le_u32).parse_next(input)?;
 
         Ok(ExceptionDirectory {
             begin_address,
@@ -164,10 +163,10 @@ impl<'a> Parse<'a> for BaseRelocationBlock {
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
         let page_rva = le_u32.parse_next(input)?;
         let block_size = le_u32.parse_next(input)?;
-        
+
         let num_entries = (block_size as usize - 8) / 2;
         let mut entries = Vec::with_capacity(num_entries);
-        
+
         for _ in 0..num_entries {
             let entry = le_u16.parse_next(input)?;
             entries.push(BaseRelocationEntry {

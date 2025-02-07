@@ -1,8 +1,8 @@
-use std::{borrow::Cow, cmp::Ordering, path::PathBuf, str::FromStr, time::Instant};
+use std::{borrow::Cow, path::PathBuf, str::FromStr};
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use coff::relocations::{I386RelocationType, RelocationType, X64RelocationType};
+use coff::relocations::{I386RelocationType, RelocationType};
 use coff::symbol_table::GlobalSymbolTable;
 use coff::{CoffFile, CoffSection};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};

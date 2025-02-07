@@ -10,7 +10,6 @@ use symbol_table::SymbolTableEntry;
 use thiserror::Error;
 use winnow::binary::le_u16;
 use winnow::binary::le_u32;
-use winnow::combinator::fail;
 use winnow::combinator::repeat;
 use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
@@ -21,15 +20,13 @@ use crate::flags::FileCharacteristics;
 use crate::flags::SectionCharacteristics;
 use crate::parse::Parse;
 
+pub mod archive;
 pub mod relocations;
 pub mod sections;
 pub mod string_table;
 pub mod symbol_table;
-pub mod archive;
 
-pub use archive::CoffArchive;
-
-use relocations::{CoffRelocation, RelocationType};
+use relocations::CoffRelocation;
 
 #[derive(Error, Debug)]
 pub enum CoffError<'a> {
@@ -237,7 +234,10 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             .into_iter()
             .enumerate()
             .map(|(idx, header)| CoffSection {
-                id: CoffSectionId { object_idx: 0, section_idx: idx },
+                id: CoffSectionId {
+                    object_idx: 0,
+                    section_idx: idx,
+                },
                 data: if header.pointer_to_raw_data > 0 && header.size_of_raw_data > 0 {
                     let ptr = header.pointer_to_raw_data as usize;
                     let len = header.size_of_raw_data as usize;

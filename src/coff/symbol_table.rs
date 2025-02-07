@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, ffi::CStr};
+use std::{borrow::Cow, collections::HashMap};
 
 use anyhow::{bail, Context as _};
 use bytes::BufMut;
@@ -6,7 +6,7 @@ use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 use winnow::{
     binary::{le_u16, le_u32},
-    combinator::{alt, preceded, repeat},
+    combinator::{alt, preceded},
     error::{ContextError, StrContext},
     prelude::*,
     token::take,
@@ -14,7 +14,7 @@ use winnow::{
 
 use crate::{
     parse::{Layout, Parse, Write},
-    util::fmt::{byte_str_format, ByteStr},
+    util::fmt::ByteStr,
 };
 
 use super::string_table::StringTable;

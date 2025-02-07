@@ -1,19 +1,16 @@
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use bytes::BufMut;
 use winnow::{
     ascii::digit1,
     binary::{le_u16, le_u32},
-    combinator::{self, alt, preceded, repeat},
+    combinator::{alt, preceded, repeat},
     error::{ContextError, StrContext},
     prelude::*,
-    token::{one_of, take, take_until},
+    token::{take, take_until},
 };
 
-use crate::parse::{Layout, Parse, Write};
-
-use super::CoffFile;
+use crate::parse::Parse;
 
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
 const FIRST_LINKER_MEMBER: &[u8] = b"/               ";
@@ -132,10 +129,7 @@ impl<'a> Parse<'a> for ArchiveMember<'a> {
             .context(StrContext::Label("member data"))
             .parse_next(input)?;
 
-        Ok(ArchiveMember {
-            header,
-            data,
-        })
+        Ok(ArchiveMember { header, data })
     }
 }
 

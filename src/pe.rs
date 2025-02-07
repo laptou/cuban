@@ -4,14 +4,12 @@ use thiserror::Error;
 use winnow::binary::le_u16;
 use winnow::binary::le_u32;
 use winnow::binary::le_u64;
-use winnow::combinator::opt;
 use winnow::combinator::repeat;
 use winnow::error::ParserError;
 use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 
-use crate::coff::relocations::CoffRelocation;
 use crate::coff::CoffSection;
 use crate::coff::CoffSectionId;
 use crate::parse::{Layout, Write};
