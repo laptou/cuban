@@ -25,18 +25,18 @@ impl<'a> Parse<'a> for CoffRelocation {
         
         // Get machine type from context to determine relocation type enum
         // For now just parse as x64 relocations
-        let relocation_type = X64RelocationType::from_u16(type_raw)
-            .unwrap_or(X64RelocationType::Absolute);
+        let relocation_type = I386RelocationType::from_u16(type_raw)
+            .unwrap_or(I386RelocationType::Absolute);
 
         Ok(CoffRelocation {
             virtual_address,
             symbol_table_index,
-            relocation_type: RelocationType::X64(relocation_type),
+            relocation_type: RelocationType::I386(relocation_type),
         })
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum RelocationType {
     X64(X64RelocationType),
     I386(I386RelocationType),

@@ -2,11 +2,12 @@ use std::{borrow::Cow, cmp::Ordering, path::PathBuf, str::FromStr, time::Instant
 
 use anyhow::{bail, Context};
 use clap::Parser;
+use coff::relocations::{I386RelocationType, RelocationType, X64RelocationType};
+use coff::symbol_table::GlobalSymbolTable;
 use coff::{CoffFile, CoffSection};
-use coff::relocations::RelocationType;
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
-use parse::Parse;
+use parse::{Layout, Parse, Write};
 use pe::{DosHeader, PeFile};
 
 mod coff;
@@ -24,8 +25,6 @@ fn process_section_relocations<'a>(
     section: &mut CoffSection<'a>,
     global_symbols: &GlobalSymbolTable<'a>,
     image_base: u64,
-    section_alignment: u32,
-    file_alignment: u32,
     section_rva: u64,
     all_sections: &[CoffSection<'a>],
 ) -> anyhow::Result<()> {
@@ -35,59 +34,79 @@ fn process_section_relocations<'a>(
     }
 
     // Section must have data to relocate
-    let data = section.data.as_mut()
-        .context("Section has relocations but no data")?;
-    
+    let data = section
+        .data
+        .as_mut()
+        .context("section has relocations but no data")?;
+
     // Process each relocation
     for reloc in &section.relocations {
         // Get the symbol being referenced
-        let symbol = global_symbols.get_by_index(section.id.object_idx, reloc.symbol_table_index as usize)
-            .context("Invalid symbol reference in relocation")?;
-        
+        let symbol = global_symbols
+            .get_by_index(section.id.object_idx, reloc.symbol_table_index as usize)
+            .with_context(|| format!(
+                "invalid symbol reference in relocation: {reloc:?} object_idx = {} symbol_table_idx = {}",
+                section.id.object_idx, reloc.symbol_table_index
+            ))?;
+
         // Get target section number (1-based)
         let target_section = symbol.entry.section_number;
         if target_section <= 0 {
-            bail!("Cannot relocate to undefined symbol {}", symbol.name);
+            bail!("cannot relocate to undefined symbol {}", symbol.name);
         }
 
+        
         // Look up target section's VA from its header
-        let target_section = all_sections.iter()
-            .find(|s| s.header.section_number == target_section)
-            .context("Target section not found")?;
-            
-        let target_address = image_base + target_section.header.virtual_address as u64 + symbol.entry.value as u64;
+        let target_section = all_sections
+            .iter()
+            .find(|s| {
+                s.id.object_idx == section.id.object_idx
+                    && s.id.section_idx == (target_section - 1) as usize
+            })
+            .with_context(|| {
+                format!(
+                    "target section {target_section} in object {} not found for relocation {reloc:?}",
+                    section.id.object_idx
+                )
+            })?;
+
+        let target_address =
+            image_base + target_section.header.virtual_address as u64 + symbol.entry.value as u64;
 
         // Apply relocation at offset
-        match reloc.type_ {
-            RelocationType::Absolute => {
-                // No-op relocation
-            }
-            RelocationType::Dir32 => {
-                // Write 32-bit VA 
-                let offset = reloc.virtual_address as usize;
-                let value = target_address as u32;
-                data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            RelocationType::Dir32NB => {
-                // Write 32-bit RVA (relative to image base)
-                let offset = reloc.virtual_address as usize;
-                let value = (target_address - image_base) as u32;
-                data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            RelocationType::Rel32 => {
-                // Write 32-bit relative offset from next instruction
-                let offset = reloc.virtual_address as usize;
-                let source_va = image_base + section_rva + (offset as u64 + 4);
-                let value = ((target_address as i64) - (source_va as i64)) as u32;
-                data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-            }
-            _ => bail!("Unsupported relocation type {:?}", reloc.type_),
+        match reloc.relocation_type {
+            RelocationType::I386(ty) => match ty {
+                I386RelocationType::Absolute => {
+                    // No-op relocation
+                }
+                I386RelocationType::Dir32 => {
+                    // Write 32-bit VA
+                    let offset = reloc.virtual_address as usize;
+                    let value = target_address as u32;
+                    data.to_mut()[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                I386RelocationType::Dir32NB => {
+                    // Write 32-bit RVA (relative to image base)
+                    let offset = reloc.virtual_address as usize;
+                    let value = (target_address - image_base) as u32;
+                    data.to_mut()[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                I386RelocationType::Rel32 => {
+                    // Write 32-bit relative offset from next instruction
+                    let offset = reloc.virtual_address as usize;
+                    let source_va = image_base + section_rva + (offset as u64 + 4);
+                    let value = ((target_address as i64) - (source_va as i64)) as u32;
+                    data.to_mut()[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                }
+                other => bail!("unsupported i386 relocation type {other:?}"),
+            },
+            other => bail!("unsupported relocation type {other:?}"),
         }
     }
 
     // Clear relocations after processing
     section.relocations.clear();
-    
+
     Ok(())
 }
 
@@ -96,18 +115,17 @@ fn process_all_relocations<'a>(
     global_symbols: &GlobalSymbolTable<'a>,
     image_base: u64,
     section_alignment: u32,
-    file_alignment: u32,
 ) -> anyhow::Result<()> {
     // Calculate and store virtual addresses in section headers
     let mut current_va = 0u64;
-    
+
     for section in sections.iter_mut() {
         // Align VA to section alignment
         current_va = (current_va + section_alignment as u64 - 1) & !(section_alignment as u64 - 1);
-        
+
         // Store VA in section header
         section.header.virtual_address = current_va as u32;
-        
+
         // Set virtual size equal to raw data size for now
         if let Some(data) = &section.data {
             section.header.virtual_size = data.len() as u32;
@@ -115,18 +133,30 @@ fn process_all_relocations<'a>(
         }
     }
 
+    let mut new_sections = vec![];
+
     // Process relocations using VAs from headers
-    for section in sections.iter_mut() {
+    for section in sections.iter() {
+        if section.relocations.is_empty() {
+            new_sections.push(section.clone());
+            continue;
+        }
+
+        let mut new_section = section.clone();
+
         process_section_relocations(
-            section,
+            &mut new_section,
             global_symbols,
             image_base,
-            section_alignment, 
-            file_alignment,
             section.header.virtual_address as u64,
-            sections
+            sections,
         )?;
+
+        new_sections.push(new_section);
     }
+
+    sections.clone_from_slice(&new_sections);
+
     Ok(())
 }
 
@@ -154,14 +184,15 @@ fn main() -> anyhow::Result<()> {
     println!("{object_files:#?}");
 
     // Collect all symbols into global symbol table
-    let mut global_symbols = collect_global_symbols(&object_files)?;
+    let global_symbols = collect_global_symbols(&object_files)?;
+    dbg!(&global_symbols);
 
     let sections = object_files
         .iter()
         .flat_map(|o| o.sections.clone())
         .collect_vec();
 
-    let merged_sections = order_and_merge_sections(sections)?;
+    let mut merged_sections = order_and_merge_sections(sections)?;
     let (code_size, init_data_size, uninit_data_size) = count_section_totals(&merged_sections);
 
     let package_version = clap::crate_version!();
@@ -176,10 +207,9 @@ fn main() -> anyhow::Result<()> {
         &global_symbols,
         0x400000, // Image base
         0x1000,   // Section alignment
-        0x200     // File alignment
     )?;
 
-    let pe_file = PeFile {
+    let mut pe_file = PeFile {
         dos_header: DosHeader { e_lfanew: 0 },
         coff_header: coff::CoffFileHeader {
             machine: coff::Machine::I386,
@@ -239,6 +269,14 @@ fn main() -> anyhow::Result<()> {
         symbol_table: None,
     };
 
+    let pe_file_len = pe_file.fix_layout();
+
+    let output_file = std::fs::File::open("out.exe")?;
+    output_file.set_len(pe_file_len as u64)?;
+
+    let mut output_file_buf = unsafe { memmap::MmapMut::map_mut(&output_file)? };
+    pe_file.write(&mut output_file_buf)?;
+
     Ok(())
 }
 
@@ -250,7 +288,7 @@ fn count_section_totals(merged_sections: &[coff::CoffSection<'_>]) -> (u32, u32,
 
     for section in merged_sections {
         let flags = section.header.characteristics;
-        let len = section.data.map(|d| d.len()).unwrap_or_default() as u32;
+        let len = section.data.as_deref().map(|d| d.len()).unwrap_or_default() as u32;
 
         if flags.contains(SectionCharacteristics::CNT_CODE) {
             code_size += len;
@@ -268,11 +306,15 @@ fn count_section_totals(merged_sections: &[coff::CoffSection<'_>]) -> (u32, u32,
     (code_size, init_data_size, uninit_data_size)
 }
 
-fn collect_global_symbols(object_files: &[CoffFile]) -> anyhow::Result<GlobalSymbolTable> {
+fn collect_global_symbols<'a, 'b: 'a>(
+    object_files: &'b [CoffFile<'a>],
+) -> anyhow::Result<GlobalSymbolTable<'a>> {
     let mut global_symbols = GlobalSymbolTable::new();
 
-    for (idx, obj_file) in object_files.iter().enumerate() {
-        global_symbols.add(&obj_file.symbol_table, obj_file.string_table.as_ref(), idx)?;
+    for (idx, obj_file) in object_files.into_iter().enumerate() {
+        if let Some(symbol_table) = &obj_file.symbol_table {
+            global_symbols.add(symbol_table, obj_file.string_table.as_ref(), idx)?;
+        }
     }
 
     Ok(global_symbols)

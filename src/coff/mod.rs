@@ -189,10 +189,19 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoffSectionId {
+    pub object_idx: usize,
+    pub section_idx: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct CoffSection<'a> {
+    /// Not parsed from file, but assigned by `cuban` for tracking
+    pub id: CoffSectionId,
+
     pub header: CoffSectionHeader<'a>,
-    pub data: Option<&'a [u8]>,
+    pub data: Option<Cow<'a, [u8]>>,
     pub relocations: Vec<CoffRelocation>,
 }
 
@@ -223,11 +232,13 @@ impl<'a> Parse<'a> for CoffFile<'a> {
 
         let mut sections: Vec<_> = section_headers
             .into_iter()
-            .map(|header| CoffSection {
+            .enumerate()
+            .map(|(idx, header)| CoffSection {
+                id: CoffSectionId { object_idx: 0, section_idx: idx },
                 data: if header.pointer_to_raw_data > 0 && header.size_of_raw_data > 0 {
                     let ptr = header.pointer_to_raw_data as usize;
                     let len = header.size_of_raw_data as usize;
-                    Some(&all_data[ptr..ptr + len])
+                    Some(all_data[ptr..ptr + len].into())
                 } else {
                     None
                 },

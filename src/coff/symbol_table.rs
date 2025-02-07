@@ -17,6 +17,8 @@ use crate::{
     util::fmt::{byte_str_format, ByteStr},
 };
 
+use super::string_table::StringTable;
+
 #[derive(Debug, Clone)]
 pub struct SymbolTable {
     pub entries: Vec<SymbolTableEntry>,
@@ -29,42 +31,43 @@ pub struct GlobalSymbolTable<'a> {
 }
 
 #[derive(Debug)]
-struct GlobalSymbol<'a> {
+pub struct GlobalSymbol<'a> {
     // The actual symbol entry
-    entry: &'a SymbolTableEntry,
+    pub entry: &'a SymbolTableEntry,
     // The object file index this symbol came from
-    object_idx: usize,
+    pub object_idx: usize,
     // The resolved name
-    name: Cow<'a, str>,
+    pub name: Cow<'a, str>,
 }
 
 impl<'a> GlobalSymbolTable<'a> {
     pub fn new() -> Self {
         Self {
-            symbols: HashMap::new()
+            symbols: HashMap::new(),
         }
     }
 
-    pub fn add(&mut self, 
-               symbol_table: &'a SymbolTable,
-               string_table: Option<&'a StringTable<'a>>,
-               object_idx: usize) -> anyhow::Result<()> {
-        
+    pub fn add(
+        &mut self,
+        symbol_table: &'a SymbolTable,
+        string_table: Option<&'a StringTable<'a>>,
+        object_idx: usize,
+    ) -> anyhow::Result<()> {
         // Process each symbol in the table
         for entry in &symbol_table.entries {
             // Resolve the symbol name
-            let name = match entry.name {
+            let name = match &entry.name {
                 Name::Short(bytes) => {
                     // Find null terminator or use whole slice
-                    let len = bytes.iter()
-                        .position(|&b| b == 0)
-                        .unwrap_or(bytes.len());
-                    
+                    let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+
                     String::from_utf8_lossy(&bytes[..len])
-                },
+                }
                 Name::Long(offset) => {
-                    let string_table = string_table.context("Symbol uses long name but no string table provided")?;
-                    let name = string_table.get(offset)
+                    let string_table = string_table
+                        .context("Symbol uses long name but no string table provided")?;
+                    let name = string_table
+                        .get(*offset)
                         .context("Invalid string table offset")?;
                     Cow::Borrowed(name)
                 }
@@ -87,17 +90,27 @@ impl<'a> GlobalSymbolTable<'a> {
                         continue;
                     }
 
+                    (StorageClass::Static, StorageClass::Static)
+                        if entry.value == 0 && existing.entry.value == 0 =>
+                    {
+                        // Static symbols w/ value 0 represent section names, ignore conflicts?
+                        continue;
+                    }
+
                     // Other combinations are errors
-                    _ => bail!("Symbol {} has conflicting storage classes", name)
+                    other => bail!("symbol {name} has conflicting storage classes: {other:?}"),
                 }
             }
 
             // Add to global table
-            self.symbols.insert(name.clone(), GlobalSymbol {
-                entry,
-                object_idx,
-                name,
-            });
+            self.symbols.insert(
+                name.clone(),
+                GlobalSymbol {
+                    entry,
+                    object_idx,
+                    name,
+                },
+            );
         }
 
         Ok(())
@@ -110,7 +123,8 @@ impl<'a> GlobalSymbolTable<'a> {
 
     // Get a symbol by index from its original symbol table
     pub fn get_by_index(&self, object_idx: usize, symbol_idx: usize) -> Option<&GlobalSymbol<'a>> {
-        self.symbols.values()
+        self.symbols
+            .values()
             .find(|sym| sym.object_idx == object_idx && sym.entry.offset == symbol_idx)
     }
 }

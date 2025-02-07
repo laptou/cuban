@@ -46,6 +46,9 @@ impl<'a> std::fmt::Debug for StringTable<'a> {
 
 impl<'a> StringTable<'a> {
     pub fn get(&self, offset: u32) -> Option<&'a str> {
+        // offsets include string table size at the beginning
+        let offset = offset - 4;
+
         if offset as usize >= self.data.len() {
             return None;
         }
@@ -67,10 +70,10 @@ impl<'a> Write for StringTable<'a> {
         // Write total size including the size field itself
         let total_size = (self.data.len() + 4) as u32;
         out.put_u32_le(total_size);
-        
+
         // Write string table data
         out.put_slice(self.data);
-        
+
         Ok(())
     }
 }

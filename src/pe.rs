@@ -13,6 +13,7 @@ use winnow::token::take;
 
 use crate::coff::relocations::CoffRelocation;
 use crate::coff::CoffSection;
+use crate::coff::CoffSectionId;
 use crate::parse::{Layout, Write};
 
 use crate::coff::{
@@ -381,7 +382,7 @@ impl<'a> Layout for PeFile<'a> {
         // Calculate total size including section data and relocations
         let mut data_offset = current_offset;
         for section in &self.sections {
-            if let Some(data) = section.data {
+            if let Some(data) = section.data.as_deref() {
                 data_offset += data.len() as u32;
 
                 // Add space for relocations if any
@@ -427,7 +428,7 @@ impl<'a> Layout for PeFile<'a> {
         // Update section data offsets and sizes
         let mut data_offset = current_offset;
         for section in &mut self.sections {
-            if let Some(data) = section.data {
+            if let Some(data) = section.data.as_deref() {
                 section.header.pointer_to_raw_data = data_offset;
                 section.header.size_of_raw_data = data.len() as u32;
                 data_offset += section.header.size_of_raw_data;
@@ -530,7 +531,12 @@ impl<'a> Write for PeFile<'a> {
             out.put_u32_le(section.header.virtual_size);
             out.put_u32_le(section.header.virtual_address);
 
-            let raw_data_len = section.data.map(|d| d.len() as u32).unwrap_or_default();
+            let raw_data_len = section
+                .data
+                .as_ref()
+                .map(|d| d.len() as u32)
+                .unwrap_or_default();
+
             out.put_u32_le(raw_data_len);
             out.put_u32_le(current_raw_data_pos); // Calculate pointer_to_raw_data
 
@@ -606,11 +612,16 @@ impl<'a> Parse<'a> for PeFile<'a> {
 
         let mut sections: Vec<_> = section_headers
             .into_iter()
-            .map(|header| CoffSection {
+            .enumerate()
+            .map(|(idx, header)| CoffSection {
+                id: CoffSectionId {
+                    object_idx: 0,
+                    section_idx: idx,
+                },
                 data: if header.pointer_to_raw_data > 0 && header.size_of_raw_data > 0 {
                     let ptr = header.pointer_to_raw_data as usize;
                     let len = header.size_of_raw_data as usize;
-                    Some(&all_data[ptr..ptr + len])
+                    Some(all_data[ptr..ptr + len].into())
                 } else {
                     None
                 },
