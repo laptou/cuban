@@ -116,7 +116,6 @@ impl<'a> Parse<'a> for SymbolTableEntry {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        println!("STE parse");
         // Parse name - first 8 bytes
         let name = alt((
             preceded(b"\0\0\0\0", le_u32).map(Name::Long),
@@ -131,14 +130,12 @@ impl<'a> Parse<'a> for SymbolTableEntry {
         let storage_class = input.next_token().unwrap();
         let storage_class = StorageClass::from_u8(storage_class).unwrap_or(StorageClass::Null);
         let number_of_aux_symbols = input.next_token().unwrap();
-        dbg!(number_of_aux_symbols, input.len());
 
         // let aux_symbols = repeat(number_of_aux_symbols as usize, parser)
 
         // Parse auxiliary symbol records
         let mut aux_symbols = Vec::with_capacity(number_of_aux_symbols as usize);
         for _ in 0..number_of_aux_symbols {
-            dbg!(storage_class, input.len());
             let aux_record = AuxSymbolRecord::parse_with_class(storage_class, input)?;
             aux_symbols.push(aux_record);
         }
@@ -155,7 +152,6 @@ impl<'a> Parse<'a> for SymbolTableEntry {
             aux_symbols,
         };
 
-        dbg!(&entry);
         Ok(entry)
     }
 }
