@@ -26,3 +26,8 @@ pub trait Parse<'a>: Sized {
 
     fn parse(data: &mut &'a [u8]) -> Result<Self, Self::Error>;
 }
+
+pub trait Write {
+    type Error;
+    fn write(&self, out: &mut impl bytes::BufMut) -> Result<(), Self::Error>;
+}
