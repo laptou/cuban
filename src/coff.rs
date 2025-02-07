@@ -104,6 +104,7 @@ impl<'a> Parse<'a> for CoffFileHeader {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CoffSectionHeader<'a> {
     pub name: &'a str,
     pub virtual_size: u32,

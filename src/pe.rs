@@ -104,10 +104,10 @@ impl<'a> Parse<'a> for OptionalHeader {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let magic = le_u32.parse_next(input)?;
+        let magic = le_u16.parse_next(input)?;
         let is_pe32_plus = magic == 0x20b;
 
-        let major_linker_version = input.next_token().unwrap();
+        let major_linker_version: u8 = input.next_token().unwrap();
         let minor_linker_version = input.next_token().unwrap();
         let size_of_code = le_u32.parse_next(input)?;
         let size_of_initialized_data = le_u32.parse_next(input)?;

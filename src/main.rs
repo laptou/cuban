@@ -1,9 +1,7 @@
 mod coff;
-mod pe;
 mod parse;
-
+mod pe;
 
 fn main() {
     println!("Hello, world!");
 }
-
