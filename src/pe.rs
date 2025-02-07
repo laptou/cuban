@@ -166,8 +166,14 @@ impl OptionalHeader {
 
 impl Layout for OptionalHeader {
     fn fix_layout(&mut self) -> u32 {
+        // Update number_of_rva_and_sizes
+        self.number_of_rva_and_sizes = self.data_directories.len() as u32;
+        self.total_size()
+    }
+
+    fn total_size(&self) -> u32 {
         let is_pe32_plus = self.magic == Self::MAGIC_PE32_PLUS;
-        
+
         // Calculate base size without data directories
         let base_size = if is_pe32_plus {
             // PE32+ header size up to but not including data directories
@@ -177,13 +183,7 @@ impl Layout for OptionalHeader {
             96
         };
 
-        // Calculate total size including data directories
-        let total_size = base_size + (self.data_directories.len() * 8) as u32;
-        
-        // Update number_of_rva_and_sizes
-        self.number_of_rva_and_sizes = self.data_directories.len() as u32;
-
-        total_size
+        base_size + (self.number_of_rva_and_sizes * 8) as u32
     }
 }
 
@@ -279,9 +279,7 @@ impl<'a> Parse<'a> for OptionalHeader {
         let size_of_image = le_u32.parse_next(input)?;
         let size_of_headers = le_u32.parse_next(input)?;
         let checksum = le_u32.parse_next(input)?;
-        let subsystem = le_u16
-            .verify_map(Subsystem::from_u16)
-            .parse_next(input)?;
+        let subsystem = le_u16.verify_map(Subsystem::from_u16).parse_next(input)?;
         let dll_characteristics = le_u16
             .verify_map(DllCharacteristics::from_bits)
             .parse_next(input)?;
@@ -366,7 +364,7 @@ impl<'a> Layout for PeFile<'a> {
     fn fix_layout(&mut self) -> u32 {
         // Start with DOS header size
         let dos_header_size = self.dos_header.fix_layout();
-        
+
         // Calculate PE header offset - must be aligned to 8 bytes
         let pe_header_offset = (dos_header_size + 7) & !7;
         self.dos_header.e_lfanew = pe_header_offset;
@@ -390,7 +388,7 @@ impl<'a> Layout for PeFile<'a> {
                 section.header.pointer_to_raw_data = data_offset;
                 section.header.size_of_raw_data = data.len() as u32;
                 data_offset += section.header.size_of_raw_data;
-                
+
                 // Add space for relocations if any
                 if !section.relocations.is_empty() {
                     section.header.pointer_to_relocations = data_offset;
@@ -406,7 +404,9 @@ impl<'a> Layout for PeFile<'a> {
         // Calculate symbol table offset if present
         if let Some(symbol_table) = &self.symbol_table {
             self.coff_header.pointer_to_symbol_table = data_offset;
-            self.coff_header.number_of_symbols = symbol_table.entries.iter()
+            self.coff_header.number_of_symbols = symbol_table
+                .entries
+                .iter()
                 .map(|e| 1 + e.number_of_aux_symbols as u32)
                 .sum();
             data_offset += self.coff_header.number_of_symbols * 18; // Each symbol is 18 bytes
@@ -578,8 +578,12 @@ impl<'a> Parse<'a> for PeFile<'a> {
 
         // Parse relocations for each section
         for section in &mut sections {
-            if section.header.number_of_relocations > 0 && section.header.pointer_to_relocations > 0 {
-                return Err(ContextError::assert(input, "pe file must not contain relocations"));
+            if section.header.number_of_relocations > 0 && section.header.pointer_to_relocations > 0
+            {
+                return Err(ContextError::assert(
+                    input,
+                    "pe file must not contain relocations",
+                ));
             }
         }
 
