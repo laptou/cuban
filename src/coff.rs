@@ -201,6 +201,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
         let file_header = CoffFileHeader::parse
             .context(StrContext::Label("coff header"))
             .parse_next(data)?;
+
         let section_headers = repeat(
             file_header.number_of_sections as usize,
             CoffSectionHeader::parse,
@@ -208,15 +209,27 @@ impl<'a> Parse<'a> for CoffFile<'a> {
         .context(StrContext::Label("sections"))
         .parse_next(data)?;
 
+        dbg!(&file_header);
+        dbg!(&section_headers);
+
         let symbol_table = if file_header.pointer_to_symbol_table > 0
             && file_header.number_of_symbols > 0
         {
+            dbg!(file_header.number_of_symbols);
+
             let symbol_table_data = &mut &all_data[file_header.pointer_to_symbol_table as usize..];
-            let symbol_table_entries = repeat(
-                file_header.number_of_symbols as usize,
-                SymbolTableEntry::parse.context(StrContext::Label("symbol table entry")),
-            )
-            .parse_next(symbol_table_data)?;
+            // auxiliary symbol table entries count against the total number of symbols
+            let mut i = 0;
+
+            let mut symbol_table_entries = vec![];
+
+            while i < file_header.number_of_symbols {
+                let entry = SymbolTableEntry::parse
+                    .context(StrContext::Label("symbol table entry"))
+                    .parse_next(symbol_table_data)?;
+                i += 1 + entry.number_of_aux_symbols as u32;
+                symbol_table_entries.push(entry);
+            }
 
             Some(SymbolTable {
                 entries: symbol_table_entries,
