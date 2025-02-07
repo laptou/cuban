@@ -39,10 +39,26 @@ impl<'a> Parse<'a> for CoffRelocation {
 #[derive(Debug, Clone)]
 pub enum RelocationType {
     X64(X64RelocationType),
+    I386(I386RelocationType),
     // Add other architectures as needed:
     // ARM(ARMRelocationType),
-    // I386(I386RelocationType),
     // etc.
+}
+
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
+#[repr(u16)]
+pub enum I386RelocationType {
+    Absolute = 0x0000,
+    Dir16 = 0x0001,
+    Rel16 = 0x0002,
+    Dir32 = 0x0006,
+    Dir32NB = 0x0007,
+    Seg12 = 0x0009,
+    Section = 0x000A,
+    SecRel = 0x000B,
+    Token = 0x000C,
+    SecRel7 = 0x000D,
+    Rel32 = 0x0014,
 }
 
 #[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
