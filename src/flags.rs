@@ -3,7 +3,7 @@ use num_derive::{FromPrimitive, ToPrimitive};
 
 // Section Characteristics
 bitflags! {
-  #[derive(Debug, Clone, Copy)]
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
   pub struct SectionCharacteristics: u32 {
       const TYPE_NO_PAD = 0x0000_0008;
       const CNT_CODE = 0x0000_0020;
