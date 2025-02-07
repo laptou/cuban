@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 
+use bytes::BufMut;
 use winnow::{
     binary::le_u32,
     error::{ContextError, StrContext},
@@ -56,6 +57,21 @@ impl<'a> StringTable<'a> {
             .unwrap_or(str_bytes.len());
 
         std::str::from_utf8(&str_bytes[..len]).ok()
+    }
+}
+
+impl<'a> Write for StringTable<'a> {
+    type Error = std::io::Error;
+
+    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+        // Write total size including the size field itself
+        let total_size = (self.data.len() + 4) as u32;
+        out.put_u32_le(total_size);
+        
+        // Write string table data
+        out.put_slice(self.data);
+        
+        Ok(())
     }
 }
 
