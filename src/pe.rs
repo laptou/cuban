@@ -145,6 +145,11 @@ pub struct OptionalHeader {
     pub data_directories: Vec<DataDirectory>,
 }
 
+impl OptionalHeader {
+    pub const MAGIC_PE32: u16 = 0x10;
+    pub const MAGIC_PE32_PLUS: u16 = 0x20;
+}
+
 impl Write for OptionalHeader {
     type Error = std::io::Error;
 
@@ -158,11 +163,11 @@ impl Write for OptionalHeader {
         out.put_u32_le(self.address_of_entry_point);
         out.put_u32_le(self.base_of_code);
 
-        if self.magic == 0x20b {
-            // PE32+
+        let is_pe32_plus = self.magic == Self::MAGIC_PE32_PLUS;
+
+        if is_pe32_plus {
             out.put_u64_le(self.image_base);
         } else {
-            // PE32
             out.put_u32_le(self.image_base as u32);
         }
 
@@ -181,14 +186,12 @@ impl Write for OptionalHeader {
         out.put_u16_le(self.subsystem);
         out.put_u16_le(self.dll_characteristics.bits());
 
-        if self.magic == 0x20b {
-            // PE32+
+        if is_pe32_plus {
             out.put_u64_le(self.size_of_stack_reserve);
             out.put_u64_le(self.size_of_stack_commit);
             out.put_u64_le(self.size_of_heap_reserve);
             out.put_u64_le(self.size_of_heap_commit);
         } else {
-            // PE32
             out.put_u32_le(self.size_of_stack_reserve as u32);
             out.put_u32_le(self.size_of_stack_commit as u32);
             out.put_u32_le(self.size_of_heap_reserve as u32);
@@ -328,7 +331,8 @@ impl<'a> Write for PeFile<'a> {
         self.dos_header.write(out)?;
 
         // Seek to PE header location
-        let current_pos = out.remaining_mut();
+        // TODO
+        let current_pos = 0;
         let padding_size = self.dos_header.e_lfanew as usize - current_pos;
         out.put_bytes(0, padding_size);
 
