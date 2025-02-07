@@ -224,9 +224,10 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             let mut symbol_table_entries = vec![];
 
             while i < file_header.number_of_symbols {
-                let entry = SymbolTableEntry::parse
+                let mut entry = SymbolTableEntry::parse
                     .context(StrContext::Label("symbol table entry"))
                     .parse_next(symbol_table_data)?;
+                entry.offset = i as usize;
                 i += 1 + entry.number_of_aux_symbols as u32;
                 symbol_table_entries.push(entry);
             }

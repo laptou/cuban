@@ -46,6 +46,8 @@ pub enum StorageClass {
 
 #[derive(Debug, Clone)]
 pub struct SymbolTableEntry {
+    /// Offset within the symbol table
+    pub offset: usize,
     pub name: Name,
     pub value: u32,
     pub section_number: i16,
@@ -142,6 +144,8 @@ impl<'a> Parse<'a> for SymbolTableEntry {
         }
 
         let entry = SymbolTableEntry {
+            // offset is not known here
+            offset: 0,
             name,
             value,
             section_number,
