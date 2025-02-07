@@ -2,9 +2,10 @@ use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 use winnow::{
     binary::{le_u16, le_u32},
-    error::ContextError,
+    combinator::{alt, preceded},
+    error::{ContextError, StrContext},
+    prelude::*,
     token::take,
-    prelude::*
 };
 
 use crate::parse::Parse;
@@ -93,15 +94,12 @@ impl<'a> Parse<'a> for SymbolTableEntry {
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
         // Parse name - first 8 bytes
-        let name_bytes = take(8usize).parse_next(input)?;
-        let name = if &name_bytes[0..4] == &[0, 0, 0, 0] {
-            // Long name - next 4 bytes are offset into string table
-            let offset = u32::from_le_bytes(name_bytes[4..8].try_into().unwrap());
-            Name::Long(offset)
-        } else {
-            // Short name - use all 8 bytes
-            Name::Short(name_bytes.try_into().unwrap())
-        };
+        let name = alt((
+            preceded(b"\0\0\0\0", le_u32).map(Name::Long),
+            take(8usize).map(|s: &[u8]| Name::Short(s.try_into().unwrap())),
+        ))
+        .context(StrContext::Label("name"))
+        .parse_next(input)?;
 
         let value = le_u32.parse_next(input)?;
         let section_number = le_u16.parse_next(input)? as i16;

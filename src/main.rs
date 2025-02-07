@@ -20,9 +20,7 @@ fn main() -> anyhow::Result<()> {
 
     for file in cli.input_files {
         let data = std::fs::read(file)?;
-        let coff = CoffFile::parse(&mut &data[..])
-            .map_err(|e| anyhow::anyhow!("{e}"))
-            .context("could not parse coff file")?;
+        let coff = CoffFile::parse(&mut &data[..]).unwrap();
 
         println!("{coff:#?}");
     }

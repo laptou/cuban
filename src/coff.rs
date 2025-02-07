@@ -214,7 +214,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             let symbol_table_data = &mut &all_data[file_header.pointer_to_symbol_table as usize..];
             let symbol_table_entries = repeat(
                 file_header.number_of_symbols as usize,
-                SymbolTableEntry::parse,
+                SymbolTableEntry::parse.context(StrContext::Label("symbol table entry")),
             )
             .parse_next(symbol_table_data)?;
 
