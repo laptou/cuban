@@ -8,6 +8,7 @@ use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 
+use crate::coff::CoffSection;
 use crate::parse::Write;
 
 use crate::coff::{
@@ -311,7 +312,7 @@ pub struct PeFile<'a> {
     pub dos_header: DosHeader,
     pub coff_header: CoffFileHeader,
     pub optional_header: OptionalHeader,
-    pub section_headers: Vec<CoffSectionHeader<'a>>,
+    pub sections: Vec<CoffSection<'a>>,
     pub symbol_table: Option<SymbolTable>,
     pub string_table: Option<StringTable<'a>>,
 }
@@ -332,26 +333,29 @@ impl<'a> Write for PeFile<'a> {
         out.put_slice(b"PE\0\0");
 
         // Calculate symbol table info
-        let (pointer_to_symbol_table, number_of_symbols) = if let Some(symbol_table) = &self.symbol_table {
-            // Calculate total number of symbol table entries including aux symbols
-            let number_of_symbols = symbol_table.entries.iter()
-                .map(|entry| 1 + entry.number_of_aux_symbols as u32)
-                .sum();
+        let (pointer_to_symbol_table, number_of_symbols) =
+            if let Some(symbol_table) = &self.symbol_table {
+                // Calculate total number of symbol table entries including aux symbols
+                let number_of_symbols = symbol_table
+                    .entries
+                    .iter()
+                    .map(|entry| 1 + entry.number_of_aux_symbols as u32)
+                    .sum();
 
-            // Symbol table follows section headers
-            let pointer_to_symbol_table = self.dos_header.e_lfanew as u32 + 4 + // PE signature
+                // Symbol table follows section headers
+                let pointer_to_symbol_table = self.dos_header.e_lfanew as u32 + 4 + // PE signature
                 20 + // COFF header size
                 self.coff_header.size_of_optional_header as u32 +
-                (self.section_headers.len() * 40) as u32; // Each section header is 40 bytes
+                (self.sections.len() * 40) as u32; // Each section header is 40 bytes
 
-            (pointer_to_symbol_table, number_of_symbols)
-        } else {
-            (0, 0)
-        };
+                (pointer_to_symbol_table, number_of_symbols)
+            } else {
+                (0, 0)
+            };
 
         // Write COFF header with calculated values
         out.put_u16_le(self.coff_header.machine as u16);
-        out.put_u16_le(self.section_headers.len() as u16);
+        out.put_u16_le(self.sections.len() as u16);
         out.put_u32_le(self.coff_header.time_date_stamp);
         out.put_u32_le(pointer_to_symbol_table);
         out.put_u32_le(number_of_symbols);
@@ -365,39 +369,42 @@ impl<'a> Write for PeFile<'a> {
         let mut current_raw_data_pos = self.dos_header.e_lfanew as u32 + 4 + // PE signature
             20 + // COFF header size
             self.coff_header.size_of_optional_header as u32 +
-            (self.section_headers.len() * 40) as u32; // Section headers
+            (self.sections.len() * 40) as u32; // Section headers
 
         // Write section headers with calculated values
-        for section in &self.section_headers {
+        for section in &self.sections {
             // Write name (padded to 8 bytes)
-            let name_bytes = section.name.as_bytes();
+            let name_bytes = section.header.name.as_bytes();
             out.put_slice(&name_bytes[..std::cmp::min(name_bytes.len(), 8)]);
             if name_bytes.len() < 8 {
                 out.put_bytes(0, 8 - name_bytes.len());
             }
 
-            out.put_u32_le(section.virtual_size);
-            out.put_u32_le(section.virtual_address);
-            out.put_u32_le(section.size_of_raw_data);
+            out.put_u32_le(section.header.virtual_size);
+            out.put_u32_le(section.header.virtual_address);
+
+            let raw_data_len = section.data.map(|d| d.len() as u32).unwrap_or_default();
+            out.put_u32_le(raw_data_len);
             out.put_u32_le(current_raw_data_pos); // Calculate pointer_to_raw_data
-            
+
             // Calculate relocation pointer if section has relocations
             let pointer_to_relocations = if !section.relocations.is_empty() {
-                current_raw_data_pos + section.size_of_raw_data
+                current_raw_data_pos + raw_data_len
             } else {
                 0
             };
             out.put_u32_le(pointer_to_relocations);
-            
+
             out.put_u32_le(0); // pointer_to_linenumbers (not supported)
             out.put_u16_le(section.relocations.len() as u16);
             out.put_u16_le(0); // number_of_linenumbers (not supported)
-            out.put_u32_le(section.characteristics.bits());
+            out.put_u32_le(section.header.characteristics.bits());
 
             // Update current position
-            current_raw_data_pos += section.size_of_raw_data;
+            current_raw_data_pos += raw_data_len;
             if !section.relocations.is_empty() {
-                current_raw_data_pos += (section.relocations.len() * 10) as u32; // Each relocation is 10 bytes
+                // Each relocation is 10 bytes
+                current_raw_data_pos += (section.relocations.len() * 10) as u32;
             }
         }
 
@@ -406,7 +413,7 @@ impl<'a> Write for PeFile<'a> {
             symbol_table.write(out)?;
         }
 
-        // Write string table if present 
+        // Write string table if present
         if let Some(string_table) = &self.string_table {
             string_table.write(out)?;
         }
@@ -496,7 +503,7 @@ impl<'a> Parse<'a> for PeFile<'a> {
             dos_header,
             coff_header,
             optional_header,
-            section_headers,
+            sections,
             symbol_table,
             string_table,
         })
