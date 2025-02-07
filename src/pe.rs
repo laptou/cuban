@@ -7,7 +7,7 @@ use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 
-use crate::coff::{CoffFileHeader, CoffSectionHeader};
+use crate::coff::{CoffFileHeader, CoffSectionHeader, StringTable, SymbolTable, symbol_table::SymbolTableEntry};
 use crate::flags::DllCharacteristics;
 use crate::parse::Parse;
 
@@ -210,17 +210,21 @@ pub struct PeFile<'a> {
     pub coff_header: CoffFileHeader,
     pub optional_header: OptionalHeader,
     pub section_headers: Vec<CoffSectionHeader<'a>>,
+    pub symbol_table: Option<SymbolTable>,
+    pub string_table: Option<StringTable<'a>>,
 }
 
 impl<'a> Parse<'a> for PeFile<'a> {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
+        let all_data = *input; // Save full input for later use
+
         let dos_header = DosHeader::parse.context(StrContext::Label("dos header")).parse_next(input)?;
 
         // Skip to PE header using e_lfanew
         let pe_offset = dos_header.e_lfanew as usize;
-        take(pe_offset).context(StrContext::Label("pe header offset")).parse_next(input)?;
+        take(pe_offset - input.len()).context(StrContext::Label("pe header offset")).parse_next(input)?;
 
         // Verify PE signature
         b"PE\0\0".context(StrContext::Label("pe magic")).parse_next(input)?;
@@ -233,11 +237,52 @@ impl<'a> Parse<'a> for PeFile<'a> {
             section_headers.push(CoffSectionHeader::parse.context(StrContext::Label("section header")).parse_next(input)?);
         }
 
+        // Parse symbol table and string table if present
+        let (symbol_table, string_table) = if coff_header.pointer_to_symbol_table > 0 
+            && coff_header.number_of_symbols > 0 
+        {
+            let symbol_table_data = &mut &all_data[coff_header.pointer_to_symbol_table as usize..];
+            
+            // Parse symbol table entries
+            let mut i = 0;
+            let mut symbol_table_entries = vec![];
+
+            while i < coff_header.number_of_symbols {
+                let mut entry = SymbolTableEntry::parse
+                    .context(StrContext::Label("symbol table entry"))
+                    .parse_next(symbol_table_data)?;
+                entry.offset = i as usize;
+                i += 1 + entry.number_of_aux_symbols as u32;
+                symbol_table_entries.push(entry);
+            }
+
+            let symbol_table = Some(SymbolTable {
+                entries: symbol_table_entries,
+            });
+
+            // String table follows symbol table
+            let symbol_table_size = coff_header.number_of_symbols as usize * 18;
+            let string_table_offset = coff_header.pointer_to_symbol_table as usize + symbol_table_size;
+            
+            let string_table = if string_table_offset < all_data.len() {
+                let string_table_data = &mut &all_data[string_table_offset..];
+                Some(StringTable::parse(string_table_data)?)
+            } else {
+                None
+            };
+
+            (symbol_table, string_table)
+        } else {
+            (None, None)
+        };
+
         Ok(PeFile {
             dos_header,
             coff_header,
             optional_header,
             section_headers,
+            symbol_table,
+            string_table,
         })
     }
 }
