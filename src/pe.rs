@@ -1,4 +1,5 @@
 use bytes::BufMut;
+use num_traits::FromPrimitive;
 use thiserror::Error;
 use winnow::binary::le_u16;
 use winnow::binary::le_u32;
@@ -53,7 +54,7 @@ impl Layout for DosHeader {
 impl Write for DosHeader {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut [u8]) -> Result<(), Self::Error> {
+    fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         // Write DOS magic "MZ"
         out.put_slice(b"MZ");
         // Write 58 bytes of DOS stub
@@ -98,7 +99,7 @@ impl Layout for DataDirectory {
 impl Write for DataDirectory {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         out.put_u32_le(self.virtual_address);
         out.put_u32_le(self.size);
         Ok(())
@@ -189,7 +190,7 @@ impl Layout for OptionalHeader {
 impl Write for OptionalHeader {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         out.put_u16_le(self.magic);
         out.put_u8(self.major_linker_version);
         out.put_u8(self.minor_linker_version);
@@ -422,7 +423,7 @@ impl<'a> Layout for PeFile<'a> {
 impl<'a> Write for PeFile<'a> {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         // Write DOS header
         self.dos_header.write(out)?;
 

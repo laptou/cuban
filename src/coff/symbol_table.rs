@@ -12,7 +12,7 @@ use winnow::{
 };
 
 use crate::{
-    parse::{Parse, Write},
+    parse::{Layout, Parse, Write},
     util::fmt::{byte_str_format, ByteStr},
 };
 
@@ -111,10 +111,27 @@ pub enum AuxSymbolRecord {
     Raw([u8; 18]), // For unhandled auxiliary records
 }
 
+impl Layout for SymbolTableEntry {
+    fn fix_layout(&mut self) -> u32 {
+        self.number_of_aux_symbols = self.aux_symbols.len() as u8;
+        self.total_size()
+    }
+
+    fn total_size(&self) -> u32 {
+        return 18 + self.number_of_aux_symbols as u32 * 18;
+    }
+}
+
+impl Layout for SymbolTable {
+    fn total_size(&self) -> u32 {
+        return self.entries.iter().map(|e| e.total_size()).sum();
+    }
+}
+
 impl Write for AuxSymbolRecord {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut [u8]) -> Result<(), Self::Error> {
+    fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         match self {
             Self::Function {
                 tag_index,
@@ -174,7 +191,7 @@ impl Write for AuxSymbolRecord {
 impl Write for SymbolTableEntry {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         // Write name
         match self.name {
             Name::Short(bytes) => {
@@ -204,10 +221,13 @@ impl Write for SymbolTableEntry {
 impl Write for SymbolTable {
     type Error = std::io::Error;
 
-    fn write(&self, out: &mut impl BufMut) -> Result<(), Self::Error> {
+    fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         for entry in &self.entries {
-            entry.write(out)?;
+            let n = entry.total_size() as usize;
+            entry.write(&mut out[..n])?;
+            out = &mut out[n..];
         }
+
         Ok(())
     }
 }

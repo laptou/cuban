@@ -34,5 +34,9 @@ pub trait Write {
 
 pub trait Layout {
     /// Updates any internal pointers and lengths, then returns the total size in bytes
-    fn fix_layout(&mut self) -> u32;
+    fn fix_layout(&mut self) -> u32 {
+        self.total_size()
+    }
+
+    fn total_size(&self) -> u32;
 }
