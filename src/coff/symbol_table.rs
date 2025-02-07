@@ -27,6 +27,10 @@ pub struct SymbolTableEntry {
     pub offset: usize,
     pub name: Name,
     pub value: u32,
+    /// 1-based section index
+    /// 0 = section undefined (external symbol)
+    /// -1 = absolute non-relocatable symbol
+    /// -2 = debug symbol
     pub section_number: i16,
     pub type_: u16,
     pub storage_class: StorageClass,
