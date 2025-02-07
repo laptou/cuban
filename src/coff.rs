@@ -17,7 +17,10 @@ use crate::flags::FileCharacteristics;
 use crate::flags::SectionCharacteristics;
 use crate::parse::Parse;
 
+mod relocations;
 mod symbol_table;
+
+use relocations::{CoffRelocation, RelocationType};
 
 #[derive(Error, Debug)]
 pub enum CoffError<'a> {
@@ -185,6 +188,7 @@ pub struct CoffFile<'a> {
     pub file_header: CoffFileHeader,
     pub section_headers: Vec<CoffSectionHeader<'a>>,
     pub symbol_table: Option<SymbolTable>,
+    pub relocations: Vec<Vec<CoffRelocation>>, // One Vec of relocations per section
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +215,23 @@ impl<'a> Parse<'a> for CoffFile<'a> {
 
         dbg!(&file_header);
         dbg!(&section_headers);
+
+        // Parse relocations for each section
+        let mut relocations = Vec::with_capacity(section_headers.len());
+        for section in &section_headers {
+            if section.number_of_relocations > 0 {
+                let reloc_data = &mut &all_data[section.pointer_to_relocations as usize..];
+                let section_relocs = repeat(
+                    section.number_of_relocations as usize,
+                    CoffRelocation::parse,
+                )
+                .context(StrContext::Label("relocations"))
+                .parse_next(reloc_data)?;
+                relocations.push(section_relocs);
+            } else {
+                relocations.push(Vec::new());
+            }
+        }
 
         let symbol_table = if file_header.pointer_to_symbol_table > 0
             && file_header.number_of_symbols > 0
@@ -243,6 +264,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             file_header,
             section_headers,
             symbol_table,
+            relocations,
         })
     }
 }
