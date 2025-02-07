@@ -5,6 +5,7 @@ use std::borrow::Cow;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 use string_table::StringTable;
+use symbol_table::SymbolTable;
 use symbol_table::SymbolTableEntry;
 use thiserror::Error;
 use winnow::binary::le_u16;
@@ -20,10 +21,10 @@ use crate::flags::FileCharacteristics;
 use crate::flags::SectionCharacteristics;
 use crate::parse::Parse;
 
-mod relocations;
-mod sections;
-mod symbol_table;
-mod string_table;
+pub mod relocations;
+pub mod sections;
+pub mod symbol_table;
+pub mod string_table;
 
 use relocations::{CoffRelocation, RelocationType};
 
@@ -200,11 +201,6 @@ pub struct CoffFile<'a> {
     pub sections: Vec<CoffSection<'a>>,
     pub symbol_table: Option<SymbolTable>,
     pub string_table: Option<StringTable<'a>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct SymbolTable {
-    pub entries: Vec<SymbolTableEntry>,
 }
 
 impl<'a> Parse<'a> for CoffFile<'a> {

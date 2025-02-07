@@ -12,9 +12,42 @@ use winnow::{
 };
 
 use crate::{
-    parse::Parse,
+    parse::{Parse, Write},
     util::fmt::{byte_str_format, ByteStr},
 };
+
+#[derive(Debug, Clone)]
+pub struct SymbolTable {
+    pub entries: Vec<SymbolTableEntry>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolTableEntry {
+    /// Offset within the symbol table
+    pub offset: usize,
+    pub name: Name,
+    pub value: u32,
+    pub section_number: i16,
+    pub type_: u16,
+    pub storage_class: StorageClass,
+    pub number_of_aux_symbols: u8,
+    pub aux_symbols: Vec<AuxSymbolRecord>,
+}
+
+#[derive(Clone, Copy)]
+pub enum Name {
+    Short([u8; 8]),
+    Long(u32), // Offset into string table
+}
+
+impl std::fmt::Debug for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Short(inner) => f.debug_tuple("Short").field(&ByteStr(inner)).finish(),
+            Self::Long(arg0) => f.debug_tuple("Long").field(arg0).finish(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
@@ -46,34 +79,6 @@ pub enum StorageClass {
     Section = 104,
     WeakExternal = 105,
     CLRToken = 107,
-}
-
-#[derive(Debug, Clone)]
-pub struct SymbolTableEntry {
-    /// Offset within the symbol table
-    pub offset: usize,
-    pub name: Name,
-    pub value: u32,
-    pub section_number: i16,
-    pub type_: u16,
-    pub storage_class: StorageClass,
-    pub number_of_aux_symbols: u8,
-    pub aux_symbols: Vec<AuxSymbolRecord>,
-}
-
-#[derive(Clone, Copy)]
-pub enum Name {
-    Short([u8; 8]),
-    Long(u32), // Offset into string table
-}
-
-impl std::fmt::Debug for Name {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Short(inner) => f.debug_tuple("Short").field(&ByteStr(inner)).finish(),
-            Self::Long(arg0) => f.debug_tuple("Long").field(arg0).finish(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

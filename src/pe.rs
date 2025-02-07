@@ -1,3 +1,4 @@
+use bytes::BufMut;
 use thiserror::Error;
 use winnow::binary::le_u16;
 use winnow::binary::le_u32;
@@ -6,11 +7,14 @@ use winnow::combinator::opt;
 use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
-use bytes::BufMut;
 
 use crate::parse::Write;
 
-use crate::coff::{CoffFileHeader, CoffSectionHeader, StringTable, SymbolTable, symbol_table::SymbolTableEntry};
+use crate::coff::{
+    string_table::StringTable,
+    symbol_table::{SymbolTable, SymbolTableEntry},
+    CoffFileHeader, CoffSectionHeader,
+};
 use crate::flags::DllCharacteristics;
 use crate::parse::Parse;
 
@@ -53,10 +57,16 @@ impl<'a> Parse<'a> for DosHeader {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        b"MZ".context(StrContext::Label("dos magic")).parse_next(input)?;
+        b"MZ"
+            .context(StrContext::Label("dos magic"))
+            .parse_next(input)?;
         // Skip the rest of the DOS header fields
-        take(58usize).context(StrContext::Label("dos header")).parse_next(input)?;
-        let e_lfanew = le_u32.context(StrContext::Label("e_lfanew")).parse_next(input)?;
+        take(58usize)
+            .context(StrContext::Label("dos header"))
+            .parse_next(input)?;
+        let e_lfanew = le_u32
+            .context(StrContext::Label("e_lfanew"))
+            .parse_next(input)?;
 
         Ok(DosHeader { e_lfanew })
     }
@@ -82,8 +92,12 @@ impl<'a> Parse<'a> for DataDirectory {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let virtual_address = le_u32.context(StrContext::Label("virtual address")).parse_next(input)?;
-        let size = le_u32.context(StrContext::Label("size")).parse_next(input)?;
+        let virtual_address = le_u32
+            .context(StrContext::Label("virtual address"))
+            .parse_next(input)?;
+        let size = le_u32
+            .context(StrContext::Label("size"))
+            .parse_next(input)?;
 
         Ok(DataDirectory {
             virtual_address,
@@ -355,7 +369,7 @@ impl<'a> Write for PeFile<'a> {
             // This requires implementing Write for SymbolTableEntry
         }
 
-        // Write string table if present 
+        // Write string table if present
         if let Some(string_table) = &self.string_table {
             // TODO: Implement string table writing
             // This requires implementing Write for StringTable
@@ -371,29 +385,43 @@ impl<'a> Parse<'a> for PeFile<'a> {
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
         let all_data = *input; // Save full input for later use
 
-        let dos_header = DosHeader::parse.context(StrContext::Label("dos header")).parse_next(input)?;
+        let dos_header = DosHeader::parse
+            .context(StrContext::Label("dos header"))
+            .parse_next(input)?;
 
         // Skip to PE header using e_lfanew
         let pe_offset = dos_header.e_lfanew as usize;
-        take(pe_offset - input.len()).context(StrContext::Label("pe header offset")).parse_next(input)?;
+        take(pe_offset - input.len())
+            .context(StrContext::Label("pe header offset"))
+            .parse_next(input)?;
 
         // Verify PE signature
-        b"PE\0\0".context(StrContext::Label("pe magic")).parse_next(input)?;
+        b"PE\0\0"
+            .context(StrContext::Label("pe magic"))
+            .parse_next(input)?;
 
-        let coff_header = CoffFileHeader::parse.context(StrContext::Label("coff header")).parse_next(input)?;
-        let optional_header = OptionalHeader::parse.context(StrContext::Label("optional header")).parse_next(input)?;
+        let coff_header = CoffFileHeader::parse
+            .context(StrContext::Label("coff header"))
+            .parse_next(input)?;
+        let optional_header = OptionalHeader::parse
+            .context(StrContext::Label("optional header"))
+            .parse_next(input)?;
 
         let mut section_headers = Vec::new();
         for _ in 0..coff_header.number_of_sections {
-            section_headers.push(CoffSectionHeader::parse.context(StrContext::Label("section header")).parse_next(input)?);
+            section_headers.push(
+                CoffSectionHeader::parse
+                    .context(StrContext::Label("section header"))
+                    .parse_next(input)?,
+            );
         }
 
         // Parse symbol table and string table if present
-        let (symbol_table, string_table) = if coff_header.pointer_to_symbol_table > 0 
-            && coff_header.number_of_symbols > 0 
+        let (symbol_table, string_table) = if coff_header.pointer_to_symbol_table > 0
+            && coff_header.number_of_symbols > 0
         {
             let symbol_table_data = &mut &all_data[coff_header.pointer_to_symbol_table as usize..];
-            
+
             // Parse symbol table entries
             let mut i = 0;
             let mut symbol_table_entries = vec![];
@@ -413,8 +441,9 @@ impl<'a> Parse<'a> for PeFile<'a> {
 
             // String table follows symbol table
             let symbol_table_size = coff_header.number_of_symbols as usize * 18;
-            let string_table_offset = coff_header.pointer_to_symbol_table as usize + symbol_table_size;
-            
+            let string_table_offset =
+                coff_header.pointer_to_symbol_table as usize + symbol_table_size;
+
             let string_table = if string_table_offset < all_data.len() {
                 let string_table_data = &mut &all_data[string_table_offset..];
                 Some(StringTable::parse(string_table_data)?)
