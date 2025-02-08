@@ -10,7 +10,7 @@ use crate::coff::{
 
 use super::symbol_table::{GlobalSymbolTable, LocalSymbol};
 
-pub fn process_all_relocations<'a>(
+pub fn apply_relocations<'a>(
     sections: &mut [CoffSection<'a>],
     global_symbols: &GlobalSymbolTable<'a>,
     image_base: u64,
@@ -46,7 +46,7 @@ pub fn process_all_relocations<'a>(
 
         let mut new_section = section.clone();
 
-        process_section_relocations(
+        apply_section_relocations(
             &mut new_section,
             global_symbols,
             image_base,
@@ -62,7 +62,7 @@ pub fn process_all_relocations<'a>(
     Ok(())
 }
 
-fn process_section_relocations<'a>(
+fn apply_section_relocations<'a>(
     section: &mut CoffSection<'a>,
     global_symbols: &GlobalSymbolTable<'a>,
     image_base: u64,

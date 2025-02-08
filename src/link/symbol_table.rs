@@ -1,11 +1,9 @@
-use std::{borrow::Cow, collections::{HashMap, HashSet}};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
-use anyhow::Context;
-
-#[derive(Debug)]
-pub struct UnresolvedSymbolsError<'a> {
-    pub undefined_symbols: HashSet<&'a str>,
-}
+use anyhow::{bail, Context};
 use derive_more::From;
 
 use crate::{
@@ -50,7 +48,7 @@ pub enum LocalSymbol<'a> {
 }
 
 impl<'a> LocalSymbolTable<'a> {
-    fn insert(&mut self, entry: LocalSymbol<'a>) -> anyhow::Result<()> {
+    fn insert(&mut self, entry: LocalSymbol<'a>) {
         if let LocalSymbol::ComdatStatic { entry } = &entry {
             let section_idx = SectionIdx(entry.section_number as usize - 1);
 
@@ -60,12 +58,6 @@ impl<'a> LocalSymbolTable<'a> {
         }
 
         self.symbols.push(entry);
-
-        if !undefined_symbols.is_empty() {
-            Err(UnresolvedSymbolsError { undefined_symbols })
-        } else {
-            Ok(())
-        }
     }
 
     fn get_idx(&self, symbol_idx: SymbolIdx) -> Option<LocalSymbol<'a>> {
@@ -163,9 +155,19 @@ fn get_comdat_info(
     Ok(None)
 }
 
+#[derive(Debug, From)]
+pub enum SymbolResolutionError<'a> {
+    UnresolvedSymbols {
+        successful_resolutions: usize,
+        undefined_symbols: HashSet<&'a str>,
+    },
+    Other(anyhow::Error),
+}
+
 impl<'a> GlobalSymbolTable<'a> {
     pub fn retain_used(&mut self, used_symbols: &HashSet<&'a str>) {
-        self.global_symbols.retain(|name, _| used_symbols.contains(name));
+        self.global_symbols
+            .retain(|name, _| used_symbols.contains(name));
     }
 
     pub fn new() -> Self {
@@ -317,7 +319,9 @@ impl<'a> GlobalSymbolTable<'a> {
                                 },
                             );
                         } else {
-                            println!("symbol {name} is undefined here, but already defined elsewhere");
+                            println!(
+                                "symbol {name} is undefined here, but already defined elsewhere"
+                            );
                         }
                     }
 
@@ -326,7 +330,7 @@ impl<'a> GlobalSymbolTable<'a> {
                             entry,
                             resolution: None,
                         },
-                    )?;
+                    );
                 }
                 StorageClass::WeakExternal => {
                     // weak external symbols are local
@@ -343,8 +347,10 @@ impl<'a> GlobalSymbolTable<'a> {
 
                     let alternate_idx = SymbolIdx(tag_index as usize);
 
-                    self.local_symbols.entry(object_idx).or_default().insert(
-                        LocalSymbol::Weak {
+                    self.local_symbols
+                        .entry(object_idx)
+                        .or_default()
+                        .insert(LocalSymbol::Weak {
                             name,
                             resolution: None,
                             alternate: symbol_table
@@ -355,8 +361,7 @@ impl<'a> GlobalSymbolTable<'a> {
                                     format!("could not resolve alternate symbol for {name:?}")
                                 })?,
                             characteristics,
-                        },
-                    )?;
+                        });
                 }
                 StorageClass::Static | StorageClass::Label | StorageClass::Section => {
                     // is this a section symbol? if so, we need to check for COMDAT sections
@@ -367,7 +372,7 @@ impl<'a> GlobalSymbolTable<'a> {
                             self.local_symbols
                                 .entry(object_idx)
                                 .or_default()
-                                .insert(LocalSymbol::ComdatStatic { entry })?;
+                                .insert(LocalSymbol::ComdatStatic { entry });
 
                             continue;
                         }
@@ -377,7 +382,7 @@ impl<'a> GlobalSymbolTable<'a> {
                     self.local_symbols
                         .entry(object_idx)
                         .or_default()
-                        .insert(LocalSymbol::Static { entry })?;
+                        .insert(LocalSymbol::Static { entry });
                 }
                 StorageClass::Function => {
                     // TODO
@@ -406,7 +411,7 @@ impl<'a> GlobalSymbolTable<'a> {
         &self,
         object_idx: ObjectIdx,
         symbol_idx: SymbolIdx,
-    ) -> Option<LocalSymbol> {
+    ) -> Option<LocalSymbol<'a>> {
         match self.local_symbols.get(&object_idx) {
             Some(obj_symbols) => obj_symbols.get_idx(symbol_idx),
             None => None,
@@ -416,8 +421,10 @@ impl<'a> GlobalSymbolTable<'a> {
     pub fn resolve_symbols(
         &mut self,
         string_tables: &HashMap<ObjectIdx, &'a StringTable<'a>>,
-    ) -> Result<(), UnresolvedSymbolsError<'a>> {
+    ) -> Result<(), SymbolResolutionError<'a>> {
         let mut undefined_symbols = HashSet::new();
+        let mut successful_resolutions = 0;
+
         // Resolve any global COMDAT symbols first
         for symbol in self.global_symbols.values_mut() {
             symbol.definition = Some(match symbol.definition.clone() {
@@ -472,7 +479,6 @@ impl<'a> GlobalSymbolTable<'a> {
                     })
                 }
                 None => {
-                    undefined_symbols.insert(symbol.name);
                     continue;
                 }
             })
@@ -503,6 +509,7 @@ impl<'a> GlobalSymbolTable<'a> {
                                 };
 
                                 resolution.replace(global_def);
+                                successful_resolutions += 1;
                             } else {
                                 undefined_symbols.insert(name);
                             }
@@ -514,26 +521,29 @@ impl<'a> GlobalSymbolTable<'a> {
                         characteristics,
                         ..
                     } => {
-                        // Look up in global symbols table
-                        if let Some(global_sym) = self.global_symbols.get(name) {
-                            if let Some(global_def) = &global_sym.definition {
-                                let GlobalSymbolDefinition::Simple(global_def) = global_def else {
-                                    unreachable!()
-                                };
+                        if resolution.is_none() {
+                            // Look up in global symbols table
+                            if let Some(global_sym) = self.global_symbols.get(name) {
+                                if let Some(global_def) = &global_sym.definition {
+                                    let GlobalSymbolDefinition::Simple(global_def) = global_def
+                                    else {
+                                        unreachable!()
+                                    };
 
-                                match characteristics {
-                                    WeakExternalCharacteristics::NoLibrarySearch => {
-                                        // Only resolve if symbol is from the same object file
-                                        if global_def.section_id.object_idx == object_idx {
+                                    match characteristics {
+                                        WeakExternalCharacteristics::NoLibrarySearch => {
+                                            // Only resolve if symbol is from the same object file
+                                            if global_def.section_id.object_idx == object_idx {
+                                                *resolution = Some(global_def.clone());
+                                            }
+                                        }
+                                        WeakExternalCharacteristics::LibrarySearch => {
+                                            // Resolve from any object file
                                             *resolution = Some(global_def.clone());
                                         }
-                                    }
-                                    WeakExternalCharacteristics::LibrarySearch => {
-                                        // Resolve from any object file
-                                        *resolution = Some(global_def.clone());
-                                    }
-                                    WeakExternalCharacteristics::Alias => {
-                                        // Don't resolve - alternate symbol will be used directly
+                                        WeakExternalCharacteristics::Alias => {
+                                            // Don't resolve - alternate symbol will be used directly
+                                        }
                                     }
                                 }
                             }
@@ -546,6 +556,13 @@ impl<'a> GlobalSymbolTable<'a> {
             }
         }
 
-        Ok(())
+        if undefined_symbols.is_empty() {
+            Ok(())
+        } else {
+            Err(SymbolResolutionError::UnresolvedSymbols {
+                successful_resolutions,
+                undefined_symbols,
+            })
+        }
     }
 }
