@@ -471,7 +471,10 @@ impl<'a> GlobalSymbolTable<'a> {
                         }
                     })
                 }
-                None => bail!("global symbol {} is undefined", symbol.name),
+                None => {
+                    undefined_symbols.insert(symbol.name);
+                    continue;
+                }
             })
         }
 
