@@ -113,11 +113,42 @@ impl<'a> GlobalSymbolTable<'a> {
                     let is_defined = entry.section_number > 0;
 
                     if is_defined {
+                        // Get COMDAT selection mode from section aux record if present
+                        let comdat_selection = if entry.section_number > 0 {
+                            let section_idx = entry.section_number as usize - 1;
+                            let section_symbol = symbol_table.entries.iter()
+                                .find(|e| e.storage_class == StorageClass::Section && 
+                                         e.section_number == entry.section_number as i16);
+                            
+                            if let Some(section_symbol) = section_symbol {
+                                if let Some(&AuxSymbolRecord::Section { selection, .. }) = section_symbol.aux_symbols.first() {
+                                    Some(selection)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
                         let gs = self.global_symbols.entry(name).or_insert(GlobalSymbol {
                             name,
                             definitions: Vec::new(),
                             comdat_selection: None,
                         });
+
+                        // Check COMDAT selection mode matches if already set
+                        if let Some(existing_mode) = gs.comdat_selection {
+                            if let Some(new_mode) = comdat_selection {
+                                if existing_mode != new_mode {
+                                    bail!("conflicting COMDAT selection modes for symbol {name}: {existing_mode:?} vs {new_mode:?}");
+                                }
+                            }
+                        } else {
+                            gs.comdat_selection = comdat_selection;
+                        }
 
                         // Add this definition
                         gs.definitions.push(GlobalSymbolDefinition {
