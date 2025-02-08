@@ -160,13 +160,8 @@ fn resolve_local_symbol<'a: 'b, 'b>(
                     .as_ref()
                     .context("external symbol is not resolved")?;
 
-                let section_id = SectionId {
-                    object_idx: gs.object_idx,
-                    section_idx: gs.section_idx,
-                };
-
                 let section = section_map
-                    .get(&section_id)
+                    .get(&gs.section_id)
                     .context("could not resolve target section")?;
 
                 return Ok((gs.entry, section));
@@ -180,13 +175,8 @@ fn resolve_local_symbol<'a: 'b, 'b>(
             // for weak symbols, use the resolution if we have one,
             // otherwise fall back to the local alternate
             if let Some(resolution) = resolution.as_ref() {
-                let section_id = SectionId {
-                    object_idx: resolution.object_idx,
-                    section_idx: resolution.section_idx,
-                };
-
                 let section = section_map
-                    .get(&section_id)
+                    .get(&resolution.section_id)
                     .context("could not resolve target section")?;
 
                 return Ok((resolution.entry, section));
