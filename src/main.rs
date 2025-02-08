@@ -5,8 +5,8 @@ use std::{borrow::Cow, path::PathBuf, str::FromStr};
 use anyhow::{bail, Context};
 use clap::Parser;
 use coff::archive::CoffArchive;
-use coff::relocations::{I386RelocationType, RelocationType};
-use coff::symbol_table::SymbolTableEntry;
+use coff::relocations::{I386RelocationType, RelocationType}; 
+use coff::symbol_table::{StorageClass, SymbolTableEntry};
 use coff::{CoffFile, CoffSection, ObjectIdx, SectionId, SectionIdx};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
@@ -111,6 +111,9 @@ fn main() -> anyhow::Result<()> {
     let package_major_version = u8::from_str(package_major_version).unwrap();
     let package_minor_version = u8::from_str(package_minor_version).unwrap();
 
+    // Find entry point
+    let entry_point = find_entry_point(&input_object_files, &global_symbols)?;
+
     let mut pe_file = PeFile {
         dos_header: DosHeader { e_lfanew: 0 },
         coff_header: coff::CoffFileHeader {
@@ -133,8 +136,7 @@ fn main() -> anyhow::Result<()> {
             size_of_initialized_data: init_data_size,
             size_of_uninitialized_data: uninit_data_size,
 
-            // TODO
-            address_of_entry_point: 0,
+            address_of_entry_point: entry_point,
             base_of_code: 0,
 
             image_base: 0x400000,
@@ -227,6 +229,28 @@ fn collect_global_symbols<'a, 'b: 'a>(
     }
 
     Ok(global_symbols)
+}
+
+fn find_entry_point<'a>(
+    object_files: &[CoffFile<'a>],
+    global_symbols: &GlobalSymbolTable<'a>,
+) -> anyhow::Result<u32> {
+    // Look for _main or mainCRTStartup symbol
+    for name in ["_main", "mainCRTStartup"] {
+        if let Some(symbol) = global_symbols.get_global(name) {
+            if let Some(def) = &symbol.definition {
+                match def {
+                    link::symbol_table::GlobalSymbolDefinition::Simple(simple) => {
+                        // Found entry point symbol
+                        return Ok(simple.entry.value);
+                    }
+                    _ => continue,
+                }
+            }
+        }
+    }
+
+    bail!("could not find entry point symbol (_main or mainCRTStartup)")
 }
 
 fn order_and_merge_sections(
