@@ -98,8 +98,6 @@ fn main() -> anyhow::Result<()> {
     let merged_sections = order_and_merge_sections(sections)?;
     let (code_size, init_data_size, uninit_data_size) = count_section_totals(&merged_sections);
 
-    dbg!(&merged_sections);
-
     let package_version = clap::crate_version!();
     let (package_major_version, package_minor_version, _) =
         package_version.splitn(3, '.').collect_tuple().unwrap();
