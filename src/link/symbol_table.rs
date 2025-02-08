@@ -174,7 +174,7 @@ impl<'a> GlobalSymbolTable<'a> {
                         },
                     )?;
                 }
-                StorageClass::Static => {
+                StorageClass::Static | StorageClass::Label => {
                     // static symbols are local
                     self.local_symbols
                         .entry(object_idx)
