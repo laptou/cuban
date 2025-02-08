@@ -121,8 +121,13 @@ impl<'a> GlobalSymbolTable<'a> {
                                          e.section_number == entry.section_number as i16);
                             
                             if let Some(section_symbol) = section_symbol {
-                                if let Some(&AuxSymbolRecord::Section { selection, .. }) = section_symbol.aux_symbols.first() {
-                                    Some(selection)
+                                // Check if section has COMDAT flag
+                                if let Some(&AuxSymbolRecord::Section { selection, characteristics, .. }) = section_symbol.aux_symbols.first() {
+                                    if characteristics.contains(SectionCharacteristics::LNK_COMDAT) {
+                                        Some(selection)
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
                                 }
