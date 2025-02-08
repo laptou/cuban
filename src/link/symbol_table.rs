@@ -14,22 +14,34 @@ use crate::coff::{
 #[derive(Debug, Clone, Default)]
 pub struct LocalSymbolTable<'a> {
     symbols: Vec<LocalSymbol<'a>>,
-    // name_map: HashMap<Cow<'a, str>, &'a SymbolTableEntry>,
+    // name_map: HashMap<&'a str, &'a SymbolTableEntry>,
 }
 
 #[derive(Debug, Clone)]
 pub enum LocalSymbol<'a> {
-    Static(&'a SymbolTableEntry),
-    Weak(WeakSymbol<'a>),
+    Static {
+        entry: &'a SymbolTableEntry,
+    },
+    External {
+        entry: &'a SymbolTableEntry,
+        resolution: Option<GlobalSymbolDefinition<'a>>,
+    },
+    Weak {
+        name: &'a str,
+
+        /// Set after symbol resolution is complete
+        resolution: Option<GlobalSymbolDefinition<'a>>,
+
+        /// The symbol to use if the weak symbol is not found
+        alternate: &'a SymbolTableEntry,
+
+        characteristics: WeakExternalCharacteristics,
+    },
 }
 
 impl<'a> LocalSymbolTable<'a> {
-    fn insert(&mut self, name: Cow<'a, str>, entry: LocalSymbol<'a>) -> anyhow::Result<()> {
+    fn insert(&mut self, entry: LocalSymbol<'a>) -> anyhow::Result<()> {
         self.symbols.push(entry);
-
-        // if self.name_map.insert(name.clone(), entry).is_some() {
-        //     bail!("name {name} is already defined in local symbol table")
-        // }
 
         Ok(())
     }
@@ -46,7 +58,7 @@ impl<'a> LocalSymbolTable<'a> {
 #[derive(Debug, Clone)]
 pub struct GlobalSymbolTable<'a> {
     // Map from symbol name to symbol definition
-    global_symbols: HashMap<Cow<'a, str>, GlobalSymbol<'a>>,
+    global_symbols: HashMap<&'a str, GlobalSymbol<'a>>,
 
     local_symbols: HashMap<ObjectIdx, LocalSymbolTable<'a>>,
 }
@@ -54,7 +66,7 @@ pub struct GlobalSymbolTable<'a> {
 #[derive(Debug, Clone)]
 pub struct GlobalSymbol<'a> {
     /// The name of this symbol
-    pub name: Cow<'a, str>,
+    pub name: &'a str,
     pub definition: Option<GlobalSymbolDefinition<'a>>,
 }
 
@@ -67,19 +79,6 @@ pub struct GlobalSymbolDefinition<'a> {
 
     /// The object file index this symbol came from
     pub object_idx: ObjectIdx,
-}
-
-#[derive(Debug, Clone)]
-pub struct WeakSymbol<'a> {
-    pub name: Cow<'a, str>,
-
-    /// Set after symbol resolution is complete
-    pub resolution: Option<GlobalSymbolDefinition<'a>>,
-
-    /// The symbol to use if the weak symbol is not found
-    pub alternate: &'a SymbolTableEntry,
-
-    pub characteristics: WeakExternalCharacteristics,
 }
 
 impl<'a> GlobalSymbolTable<'a> {
@@ -99,24 +98,10 @@ impl<'a> GlobalSymbolTable<'a> {
         // Process each symbol in the table
         for entry in &symbol_table.entries {
             // Resolve the symbol name
-            let name = match &entry.name {
-                Name::Short(bytes) => {
-                    // Find null terminator or use whole slice
-                    let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-
-                    String::from_utf8_lossy(&bytes[..len])
-                }
-                Name::Long(offset) => {
-                    let string_table = string_table
-                        .context("symbol uses long name but no string table provided")?;
-
-                    let name = string_table
-                        .get(*offset)
-                        .context("invalid string table offset")?;
-
-                    Cow::Borrowed(name)
-                }
-            };
+            let name = entry
+                .name
+                .as_str(string_table)
+                .context("could not resolve symbol name")?;
 
             match entry.storage_class {
                 StorageClass::External => {
@@ -125,13 +110,10 @@ impl<'a> GlobalSymbolTable<'a> {
                     let is_defined = entry.section_number > 0;
 
                     if is_defined {
-                        let gs = self
-                            .global_symbols
-                            .entry(name.clone())
-                            .or_insert(GlobalSymbol {
-                                name: name.clone(),
-                                definition: None,
-                            });
+                        let gs = self.global_symbols.entry(name).or_insert(GlobalSymbol {
+                            name,
+                            definition: None,
+                        });
 
                         match gs.definition {
                             Some(_) => bail!("external symbol {name:?} is defined twice"),
@@ -147,13 +129,20 @@ impl<'a> GlobalSymbolTable<'a> {
                     } else {
                         // put a stub in the GST
                         self.global_symbols.insert(
-                            name.clone(),
+                            name,
                             GlobalSymbol {
                                 name,
                                 definition: None,
                             },
                         );
                     }
+
+                    self.local_symbols.entry(object_idx).or_default().insert(
+                        LocalSymbol::External {
+                            entry,
+                            resolution: None,
+                        },
+                    )?;
                 }
                 StorageClass::WeakExternal => {
                     // weak external symbols are local
@@ -171,9 +160,8 @@ impl<'a> GlobalSymbolTable<'a> {
                     let alternate_idx = SymbolIdx(tag_index as usize);
 
                     self.local_symbols.entry(object_idx).or_default().insert(
-                        name.clone(),
-                        LocalSymbol::Weak(WeakSymbol {
-                            name: name.clone(),
+                        LocalSymbol::Weak {
+                            name,
                             resolution: None,
                             alternate: symbol_table
                                 .entries
@@ -183,7 +171,7 @@ impl<'a> GlobalSymbolTable<'a> {
                                     format!("could not resolve alternate symbol for {name:?}")
                                 })?,
                             characteristics,
-                        }),
+                        },
                     )?;
                 }
                 StorageClass::Static => {
@@ -191,7 +179,7 @@ impl<'a> GlobalSymbolTable<'a> {
                     self.local_symbols
                         .entry(object_idx)
                         .or_default()
-                        .insert(name.clone(), LocalSymbol::Static(entry))?;
+                        .insert(LocalSymbol::Static { entry })?;
                 }
                 StorageClass::Function => {
                     // TODO

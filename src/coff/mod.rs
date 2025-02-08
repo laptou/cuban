@@ -200,7 +200,7 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CoffSectionId {
     pub object_idx: ObjectIdx,
     pub section_idx: SectionIdx,

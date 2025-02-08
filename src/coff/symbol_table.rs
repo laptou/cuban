@@ -56,6 +56,19 @@ impl std::fmt::Debug for Name {
     }
 }
 
+impl Name {
+    pub fn as_str<'a, 'b: 'a>(&'b self, string_table: Option<&StringTable<'a>>) -> Option<&'a str> {
+        match self {
+            Name::Short(bytes) => {
+                // Find null terminator or use whole slice
+                let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+                std::str::from_utf8(&bytes[..len]).ok()
+            }
+            Name::Long(offset) => string_table?.get(*offset),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
 pub enum StorageClass {
