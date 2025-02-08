@@ -96,8 +96,48 @@ fn main() -> anyhow::Result<()> {
         .filter_map(|(idx, obj)| obj.string_table.as_ref().map(|st| (ObjectIdx(idx), st)))
         .collect();
 
-    // Resolve all symbol references
-    global_symbols.resolve_symbols(&string_tables)?;
+    // Keep resolving symbols until no more undefined symbols or no more resolutions possible
+    let mut last_undefined = HashSet::new();
+    loop {
+        // Attempt to resolve symbols
+        match global_symbols.resolve_symbols(&string_tables) {
+            Ok(_) => break, // All symbols resolved
+            Err(unresolved) => {
+                // Check if we made any progress
+                if unresolved.undefined_symbols == last_undefined {
+                    // No new symbols resolved, search libraries
+                    let mut found_any = false;
+                    for lib_obj in &library_object_files {
+                        if let Some(symbol_table) = &lib_obj.symbol_table {
+                            let section_map = lib_obj.sections.iter().map(|s| (s.id, s)).collect();
+                            
+                            // Only process symbols we need
+                            for entry in &symbol_table.entries {
+                                if let Some(name) = entry.name.as_str(lib_obj.string_table.as_ref()) {
+                                    if unresolved.undefined_symbols.contains(name) {
+                                        global_symbols.add_all(
+                                            symbol_table,
+                                            lib_obj.string_table.as_ref(),
+                                            &section_map,
+                                            ObjectIdx(input_object_files.len()),
+                                        )?;
+                                        found_any = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if !found_any {
+                        // No symbols found in libraries
+                        bail!("Unresolved symbols: {:?}", unresolved.undefined_symbols);
+                    }
+                }
+                last_undefined = unresolved.undefined_symbols;
+            }
+        }
+    }
 
     let mut sections = input_object_files
         .iter()

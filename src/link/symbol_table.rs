@@ -1,6 +1,11 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::{HashMap, HashSet}};
 
-use anyhow::{bail, Context};
+use anyhow::Context;
+
+#[derive(Debug)]
+pub struct UnresolvedSymbolsError<'a> {
+    pub undefined_symbols: HashSet<&'a str>,
+}
 use derive_more::From;
 
 use crate::{
@@ -56,7 +61,11 @@ impl<'a> LocalSymbolTable<'a> {
 
         self.symbols.push(entry);
 
-        Ok(())
+        if !undefined_symbols.is_empty() {
+            Err(UnresolvedSymbolsError { undefined_symbols })
+        } else {
+            Ok(())
+        }
     }
 
     fn get_idx(&self, symbol_idx: SymbolIdx) -> Option<LocalSymbol<'a>> {
@@ -407,7 +416,8 @@ impl<'a> GlobalSymbolTable<'a> {
     pub fn resolve_symbols(
         &mut self,
         string_tables: &HashMap<ObjectIdx, &'a StringTable<'a>>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), UnresolvedSymbolsError<'a>> {
+        let mut undefined_symbols = HashSet::new();
         // Resolve any global COMDAT symbols first
         for symbol in self.global_symbols.values_mut() {
             symbol.definition = Some(match symbol.definition.clone() {
@@ -491,7 +501,7 @@ impl<'a> GlobalSymbolTable<'a> {
 
                                 resolution.replace(global_def);
                             } else {
-                                bail!("cannot resolve external symbol {name}");
+                                undefined_symbols.insert(name);
                             }
                         }
                     }
