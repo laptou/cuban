@@ -67,7 +67,10 @@ pub struct GlobalSymbolTable<'a> {
 pub struct GlobalSymbol<'a> {
     /// The name of this symbol
     pub name: &'a str,
-    pub definition: Option<GlobalSymbolDefinition<'a>>,
+    /// Multiple definitions for COMDAT symbols
+    pub definitions: Vec<GlobalSymbolDefinition<'a>>,
+    /// Optional COMDAT selection mode
+    pub comdat_selection: Option<ComdatSelection>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,27 +115,25 @@ impl<'a> GlobalSymbolTable<'a> {
                     if is_defined {
                         let gs = self.global_symbols.entry(name).or_insert(GlobalSymbol {
                             name,
-                            definition: None,
+                            definitions: Vec::new(),
+                            comdat_selection: None,
                         });
 
-                        match gs.definition {
-                            Some(_) => bail!("external symbol {name:?} is defined twice"),
-                            None => {
-                                gs.definition = Some(GlobalSymbolDefinition {
-                                    // section_number uses 1-based indexing
-                                    section_idx: SectionIdx(entry.section_number as usize - 1),
-                                    object_idx,
-                                    entry,
-                                })
-                            }
-                        }
+                        // Add this definition
+                        gs.definitions.push(GlobalSymbolDefinition {
+                            // section_number uses 1-based indexing
+                            section_idx: SectionIdx(entry.section_number as usize - 1),
+                            object_idx,
+                            entry,
+                        });
                     } else {
                         // put a stub in the GST
                         self.global_symbols.insert(
                             name,
                             GlobalSymbol {
                                 name,
-                                definition: None,
+                                definitions: Vec::new(),
+                                comdat_selection: None,
                             },
                         );
                     }
@@ -235,9 +236,52 @@ impl<'a> GlobalSymbolTable<'a> {
                         
                         // Look up in global symbols table
                         if let Some(global_sym) = self.global_symbols.get(name) {
-                            if let Some(def) = &global_sym.definition {
-                                // Found a definition, resolve it
-                                *resolution = Some(def.clone());
+                            if !global_sym.definitions.is_empty() {
+                                // Select definition based on COMDAT selection mode or require exactly one
+                                let selected_def = match global_sym.comdat_selection {
+                                    Some(ComdatSelection::Any) => {
+                                        // Pick first definition
+                                        Some(global_sym.definitions[0].clone())
+                                    }
+                                    Some(ComdatSelection::Largest) => {
+                                        // Pick definition with largest size
+                                        global_sym.definitions.iter()
+                                            .max_by_key(|def| def.entry.value)
+                                            .cloned()
+                                    }
+                                    Some(ComdatSelection::SameSize) => {
+                                        // Check all definitions have same size
+                                        let first_size = global_sym.definitions[0].entry.value;
+                                        if global_sym.definitions.iter().all(|def| def.entry.value == first_size) {
+                                            Some(global_sym.definitions[0].clone())
+                                        } else {
+                                            bail!("COMDAT symbol {name} has definitions with different sizes");
+                                        }
+                                    }
+                                    Some(ComdatSelection::ExactMatch) => {
+                                        // TODO: Implement exact content matching
+                                        bail!("COMDAT ExactMatch selection not implemented");
+                                    }
+                                    Some(ComdatSelection::NoDuplicates) => {
+                                        if global_sym.definitions.len() > 1 {
+                                            bail!("COMDAT symbol {name} has multiple definitions with NoDuplicates selection");
+                                        }
+                                        Some(global_sym.definitions[0].clone())
+                                    }
+                                    Some(ComdatSelection::Associative) => {
+                                        // TODO: Implement associative selection
+                                        bail!("COMDAT Associative selection not implemented");
+                                    }
+                                    None => {
+                                        // No COMDAT - require exactly one definition
+                                        if global_sym.definitions.len() != 1 {
+                                            bail!("non-COMDAT symbol {name} has multiple definitions");
+                                        }
+                                        Some(global_sym.definitions[0].clone())
+                                    }
+                                }?;
+                                
+                                *resolution = Some(selected_def);
                             }
                         }
                     }
