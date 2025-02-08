@@ -2,6 +2,7 @@ use std::{borrow::Cow, collections::HashMap};
 
 use anyhow::{bail, Context as _};
 use bytes::BufMut;
+use derive_more::From;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 use winnow::{
@@ -147,24 +148,36 @@ pub struct AuxSymbolRecordSection {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct AuxSymbolRecordFunction {
+    pub tag_index: u32,
+    pub total_size: u32,
+    pub pointer_to_line_number: u32,
+    pub pointer_to_next_function: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AuxSymbolRecordBeginEndFunction {
+    pub line_number: u16,
+    pub pointer_to_next_function: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AuxSymbolRecordWeakExternal {
+    pub tag_index: u32,
+    pub characteristics: WeakExternalCharacteristics,
+}
+
+#[derive(Debug, Clone, Copy, From)]
+pub struct AuxSymbolRecordFile {
+    pub filename: [u8; 18],
+}
+
+#[derive(Debug, Clone, Copy, From)]
 pub enum AuxSymbolRecord {
-    Function {
-        tag_index: u32,
-        total_size: u32,
-        pointer_to_line_number: u32,
-        pointer_to_next_function: u32,
-    },
-    BeginEndFunction {
-        line_number: u16,
-        pointer_to_next_function: u32,
-    },
-    WeakExternal {
-        tag_index: u32,
-        characteristics: WeakExternalCharacteristics,
-    },
-    File {
-        filename: [u8; 18],
-    },
+    Function(AuxSymbolRecordFunction),
+    BeginEndFunction(AuxSymbolRecordBeginEndFunction),
+    WeakExternal(AuxSymbolRecordWeakExternal),
+    File(AuxSymbolRecordFile),
     Section(AuxSymbolRecordSection),
     Raw([u8; 18]), // For unhandled auxiliary records
 }
@@ -200,35 +213,35 @@ impl Write for AuxSymbolRecord {
 
     fn write(&self, mut out: &mut [u8]) -> Result<(), Self::Error> {
         match self {
-            Self::Function {
+            Self::Function(AuxSymbolRecordFunction {
                 tag_index,
                 total_size,
                 pointer_to_line_number,
                 pointer_to_next_function,
-            } => {
+            }) => {
                 out.put_u32_le(*tag_index);
                 out.put_u32_le(*total_size);
                 out.put_u32_le(*pointer_to_line_number);
                 out.put_u32_le(*pointer_to_next_function);
                 out.put_bytes(0, 2); // Unused
             }
-            Self::BeginEndFunction {
+            Self::BeginEndFunction(AuxSymbolRecordBeginEndFunction {
                 line_number,
                 pointer_to_next_function,
-            } => {
+            }) => {
                 out.put_u16_le(*line_number);
                 out.put_u32_le(*pointer_to_next_function);
                 out.put_bytes(0, 12); // Unused
             }
-            Self::WeakExternal {
+            Self::WeakExternal(AuxSymbolRecordWeakExternal {
                 tag_index,
                 characteristics,
-            } => {
+            }) => {
                 out.put_u32_le(*tag_index);
                 out.put_u32_le(*characteristics as u32);
                 out.put_bytes(0, 10); // Unused
             }
-            Self::File { filename } => {
+            Self::File(AuxSymbolRecordFile { filename }) => {
                 out.put_slice(filename);
             }
             Self::Section(AuxSymbolRecordSection {
@@ -323,6 +336,7 @@ impl<'a> Parse<'a> for SymbolTableEntry {
         // Parse auxiliary symbol records
         let mut aux_symbols = Vec::with_capacity(number_of_aux_symbols as usize);
         for _ in 0..number_of_aux_symbols {
+            
             let aux_record = AuxSymbolRecord::parse_with_class(storage_class, input)?;
             aux_symbols.push(aux_record);
         }
@@ -365,12 +379,12 @@ impl AuxSymbolRecord {
                 take(2usize)
                     .context(StrContext::Label("unused"))
                     .parse_next(input)?;
-                Ok(AuxSymbolRecord::Function {
+                Ok(AuxSymbolRecord::Function(AuxSymbolRecordFunction {
                     tag_index,
                     total_size,
                     pointer_to_line_number,
                     pointer_to_next_function,
-                })
+                }))
             }
             StorageClass::Block => {
                 let line_number = le_u16
@@ -382,10 +396,12 @@ impl AuxSymbolRecord {
                 take(12usize)
                     .context(StrContext::Label("unused"))
                     .parse_next(input)?;
-                Ok(AuxSymbolRecord::BeginEndFunction {
-                    line_number,
-                    pointer_to_next_function,
-                })
+                Ok(AuxSymbolRecord::BeginEndFunction(
+                    AuxSymbolRecordBeginEndFunction {
+                        line_number,
+                        pointer_to_next_function,
+                    },
+                ))
             }
             StorageClass::WeakExternal => {
                 let tag_index = le_u32
@@ -399,20 +415,20 @@ impl AuxSymbolRecord {
                     .parse_next(input)?;
                 let characteristics = WeakExternalCharacteristics::from_u32(characteristics)
                     .unwrap_or(WeakExternalCharacteristics::NoLibrarySearch);
-                Ok(AuxSymbolRecord::WeakExternal {
+                Ok(AuxSymbolRecord::WeakExternal(AuxSymbolRecordWeakExternal {
                     tag_index,
                     characteristics,
-                })
+                }))
             }
             StorageClass::File => {
                 let filename = take(18usize)
                     .context(StrContext::Label("filename"))
                     .parse_next(input)?;
-                Ok(AuxSymbolRecord::File {
+                Ok(AuxSymbolRecord::File(AuxSymbolRecordFile {
                     filename: filename.try_into().unwrap(),
-                })
+                }))
             }
-            StorageClass::Section => {
+            StorageClass::Section | StorageClass::Static => {
                 let length = le_u32
                     .context(StrContext::Label("length"))
                     .parse_next(input)?;
