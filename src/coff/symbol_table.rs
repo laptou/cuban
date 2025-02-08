@@ -109,6 +109,17 @@ pub enum WeakExternalCharacteristics {
     Alias = 3,
 }
 
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
+#[repr(u8)]
+pub enum ComdatSelection {
+    NoDuplicates = 1,
+    Any = 2,
+    SameSize = 3,
+    ExactMatch = 4,
+    Associative = 5,
+    Largest = 6,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum AuxSymbolRecord {
     Function {
@@ -134,7 +145,7 @@ pub enum AuxSymbolRecord {
         number_of_line_numbers: u16,
         checksum: u32,
         number: u16,
-        selection: u8,
+        selection: ComdatSelection,
     },
     Raw([u8; 18]), // For unhandled auxiliary records
 }
@@ -214,7 +225,7 @@ impl Write for AuxSymbolRecord {
                 out.put_u16_le(*number_of_line_numbers);
                 out.put_u32_le(*checksum);
                 out.put_u16_le(*number);
-                out.put_u8(*selection);
+                out.put_u8(*selection as u8);
                 out.put_bytes(0, 3); // Unused
             }
             Self::Raw(raw) => {
@@ -398,7 +409,9 @@ impl AuxSymbolRecord {
                 let number = le_u16
                     .context(StrContext::Label("number"))
                     .parse_next(input)?;
-                let selection = input.next_token().unwrap();
+                let selection_val = input.next_token().unwrap();
+                let selection = ComdatSelection::from_u8(selection_val)
+                    .unwrap_or(ComdatSelection::Any);
                 take(3usize)
                     .context(StrContext::Label("unused"))
                     .parse_next(input)?;
