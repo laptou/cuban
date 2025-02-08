@@ -88,6 +88,14 @@ pub enum StorageClass {
     CLRToken = 107,
 }
 
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
+#[repr(u32)]
+pub enum WeakExternalCharacteristics {
+    NoLibrarySearch = 1,
+    LibrarySearch = 2,
+    Alias = 3,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum AuxSymbolRecord {
     Function {
@@ -102,7 +110,7 @@ pub enum AuxSymbolRecord {
     },
     WeakExternal {
         tag_index: u32,
-        characteristics: u32,
+        characteristics: WeakExternalCharacteristics,
     },
     File {
         filename: [u8; 18],
@@ -174,7 +182,7 @@ impl Write for AuxSymbolRecord {
                 characteristics,
             } => {
                 out.put_u32_le(*tag_index);
-                out.put_u32_le(*characteristics);
+                out.put_u32_le(*characteristics as u32);
                 out.put_bytes(0, 10); // Unused
             }
             Self::File { filename } => {
@@ -346,6 +354,8 @@ impl AuxSymbolRecord {
                 take(10usize)
                     .context(StrContext::Label("unused"))
                     .parse_next(input)?;
+                let characteristics = WeakExternalCharacteristics::from_u32(characteristics)
+                    .unwrap_or(WeakExternalCharacteristics::NoLibrarySearch);
                 Ok(AuxSymbolRecord::WeakExternal {
                     tag_index,
                     characteristics,
