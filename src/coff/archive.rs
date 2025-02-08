@@ -3,8 +3,8 @@ use std::str::FromStr;
 
 use winnow::{
     ascii::digit1,
-    binary::{le_u16, le_u32},
-    combinator::{alt, preceded, repeat},
+    binary::{be_u32, le_u16, le_u32},
+    combinator::{alt, empty, opt, preceded, repeat},
     error::{ContextError, StrContext},
     prelude::*,
     token::{take, take_until},
@@ -13,8 +13,7 @@ use winnow::{
 use crate::parse::Parse;
 
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
-const FIRST_LINKER_MEMBER: &[u8] = b"/               ";
-const SECOND_LINKER_MEMBER: &[u8] = b"/               ";
+const LINKER_MEMBER: &[u8] = b"/               ";
 const LONGNAMES_MEMBER: &[u8] = b"//              ";
 
 #[derive(Debug, Clone)]
@@ -34,9 +33,9 @@ pub struct ArchiveMember<'a> {
 #[derive(Debug, Clone)]
 pub struct ArchiveMemberHeader<'a> {
     pub name: ArchiveMemberName<'a>,
-    pub date: u32,
-    pub user_id: u16,
-    pub group_id: u16,
+    pub date: i64,
+    pub user_id: Option<u16>,
+    pub group_id: Option<u16>,
     pub mode: u32,
     pub size: u32,
 }
@@ -48,9 +47,7 @@ pub enum ArchiveMemberName<'a> {
     /// Name stored in longnames member at given offset
     LongName(u32),
     /// First linker member
-    FirstLinker,
-    /// Second linker member  
-    SecondLinker,
+    Linker,
     /// Longnames member
     Longnames,
 }
@@ -88,14 +85,25 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
         let mut longnames = None;
 
         while !input.is_empty() {
-            let mut member: ArchiveMember<'a> = ArchiveMember::parse.parse_next(input)?;
+            let mut member: ArchiveMember<'a> = ArchiveMember::parse
+                .context(StrContext::Label("archive member"))
+                .parse_next(input)?;
 
             match &member.header.name {
-                ArchiveMemberName::FirstLinker => {
-                    first_linker = Some(FirstLinkerMember::parse(&mut member.data)?);
-                }
-                ArchiveMemberName::SecondLinker => {
-                    second_linker = Some(SecondLinkerMember::parse(&mut member.data)?);
+                ArchiveMemberName::Linker => {
+                    if first_linker.is_none() {
+                        first_linker = Some(
+                            FirstLinkerMember::parse
+                                .context(StrContext::Label("first linker member"))
+                                .parse_next(&mut member.data)?,
+                        );
+                    } else {
+                        second_linker = Some(
+                            SecondLinkerMember::parse
+                                .context(StrContext::Label("first linker member"))
+                                .parse_next(&mut member.data)?,
+                        );
+                    }
                 }
                 ArchiveMemberName::Longnames => {
                     longnames = Some(LongnamesMember {
@@ -124,7 +132,9 @@ impl<'a> Parse<'a> for ArchiveMember<'a> {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
-        let header = ArchiveMemberHeader::parse.parse_next(input)?;
+        let header = ArchiveMemberHeader::parse
+            .context(StrContext::Label("archive member header"))
+            .parse_next(input)?;
         let data = take(header.size as usize)
             .context(StrContext::Label("member data"))
             .parse_next(input)?;
@@ -142,8 +152,7 @@ impl<'a> Parse<'a> for ArchiveMemberHeader<'a> {
             .parse_next(input)?;
 
         let name = alt((
-            FIRST_LINKER_MEMBER.map(|_| ArchiveMemberName::FirstLinker),
-            SECOND_LINKER_MEMBER.map(|_| ArchiveMemberName::SecondLinker),
+            LINKER_MEMBER.map(|_| ArchiveMemberName::Linker),
             LONGNAMES_MEMBER.map(|_| ArchiveMemberName::Longnames),
             preceded(b"/", digit1)
                 .try_map(std::str::from_utf8)
@@ -159,21 +168,21 @@ impl<'a> Parse<'a> for ArchiveMemberHeader<'a> {
         let date = take(12usize)
             .try_map(std::str::from_utf8)
             .map(str::trim)
-            .try_map(u32::from_str)
+            .try_map(i64::from_str)
             .context(StrContext::Label("date"))
             .parse_next(input)?;
 
         let user_id = take(6usize)
             .try_map(std::str::from_utf8)
             .map(str::trim)
-            .try_map(u16::from_str)
+            .and_then(opt(digit1.try_map(u16::from_str)))
             .context(StrContext::Label("user id"))
             .parse_next(input)?;
 
         let group_id = take(6usize)
             .try_map(std::str::from_utf8)
             .map(str::trim)
-            .try_map(u16::from_str)
+            .and_then(opt(digit1.try_map(u16::from_str)))
             .context(StrContext::Label("group id"))
             .parse_next(input)?;
 
@@ -211,9 +220,13 @@ impl<'a> Parse<'a> for FirstLinkerMember<'a> {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, ContextError> {
-        let num_symbols = le_u32.parse_next(input)?;
+        let num_symbols = be_u32
+            .context(StrContext::Label("symbol count"))
+            .parse_next(input)?;
 
-        let offsets: Vec<u32> = repeat(num_symbols as usize, le_u32).parse_next(input)?;
+        let offsets: Vec<u32> = repeat(num_symbols as usize, be_u32)
+            .context(StrContext::Label("symbol offsets"))
+            .parse_next(input)?;
         let mut symbols = Vec::with_capacity(num_symbols as usize);
 
         for offset in offsets {

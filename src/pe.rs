@@ -12,6 +12,9 @@ use winnow::token::take;
 
 use crate::coff::CoffSection;
 use crate::coff::CoffSectionId;
+use crate::coff::ObjectIdx;
+use crate::coff::SectionIdx;
+use crate::coff::SymbolIdx;
 use crate::parse::{Layout, Write};
 
 use crate::coff::{
@@ -599,8 +602,8 @@ impl<'a> Parse<'a> for PeFile<'a> {
             .enumerate()
             .map(|(idx, header)| CoffSection {
                 id: CoffSectionId {
-                    object_idx: 0,
-                    section_idx: idx,
+                    object_idx: ObjectIdx(0),
+                    section_idx: SectionIdx(idx),
                 },
                 data: if header.pointer_to_raw_data > 0 && header.size_of_raw_data > 0 {
                     let ptr = header.pointer_to_raw_data as usize;
@@ -639,7 +642,7 @@ impl<'a> Parse<'a> for PeFile<'a> {
                 let mut entry = SymbolTableEntry::parse
                     .context(StrContext::Label("symbol table entry"))
                     .parse_next(symbol_table_data)?;
-                entry.offset = i as usize;
+                entry.offset = SymbolIdx(i as usize);
                 i += 1 + entry.number_of_aux_symbols as u32;
                 symbol_table_entries.push(entry);
             }

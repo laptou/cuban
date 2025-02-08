@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 
+use derive_more::From;
+use derive_more::Into;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::FromPrimitive;
 use string_table::StringTable;
@@ -25,6 +27,15 @@ pub mod relocations;
 pub mod sections;
 pub mod string_table;
 pub mod symbol_table;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
+pub struct ObjectIdx(pub usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
+pub struct SectionIdx(pub usize);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
+pub struct SymbolIdx(pub usize);
 
 use relocations::CoffRelocation;
 
@@ -191,8 +202,8 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoffSectionId {
-    pub object_idx: usize,
-    pub section_idx: usize,
+    pub object_idx: ObjectIdx,
+    pub section_idx: SectionIdx,
 }
 
 #[derive(Debug, Clone)]
@@ -235,8 +246,8 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             .enumerate()
             .map(|(idx, header)| CoffSection {
                 id: CoffSectionId {
-                    object_idx: 0,
-                    section_idx: idx,
+                    object_idx: ObjectIdx(0),
+                    section_idx: SectionIdx(idx),
                 },
                 data: if header.pointer_to_raw_data > 0 && header.size_of_raw_data > 0 {
                     let ptr = header.pointer_to_raw_data as usize;
@@ -280,7 +291,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
                 let mut entry = SymbolTableEntry::parse
                     .context(StrContext::Label("symbol table entry"))
                     .parse_next(symbol_table_data)?;
-                entry.offset = i as usize;
+                entry.offset = SymbolIdx(i as usize);
                 i += 1 + entry.number_of_aux_symbols as u32;
                 symbol_table_entries.push(entry);
             }

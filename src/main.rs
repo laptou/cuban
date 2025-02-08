@@ -1,17 +1,20 @@
+use std::ops::Deref;
 use std::{borrow::Cow, path::PathBuf, str::FromStr};
 
 use anyhow::{bail, Context};
 use clap::Parser;
+use coff::archive::CoffArchive;
 use coff::relocations::{I386RelocationType, RelocationType};
-use coff::symbol_table::GlobalSymbolTable;
-use coff::{CoffFile, CoffSection};
+use coff::{CoffFile, CoffSection, ObjectIdx, SectionIdx};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
+use link::symbol_table::GlobalSymbolTable;
 use parse::{Layout, Parse, Write};
 use pe::{DosHeader, PeFile};
 
 mod coff;
 mod flags;
+mod link;
 mod parse;
 mod pe;
 mod util;
@@ -43,34 +46,37 @@ fn process_section_relocations<'a>(
     for reloc in &section.relocations {
         // Get the symbol being referenced
         let symbol = global_symbols
-            .get_by_index(section.id.object_idx, reloc.symbol_table_index as usize)
+            .get_local_symbol(section.id.object_idx, coff::SymbolIdx(reloc.symbol_table_index as usize))
             .with_context(|| format!(
-                "invalid symbol reference in relocation: {reloc:?} object_idx = {} symbol_table_idx = {}",
+                "invalid symbol reference in relocation: {reloc:?} object_idx = {:?} symbol_table_idx = {:?}",
                 section.id.object_idx, reloc.symbol_table_index
             ))?;
 
         // Get target section number (1-based)
-        let target_section = symbol.entry.section_number;
+        let target_section = symbol.section_number;
         if target_section <= 0 {
-            bail!("cannot relocate to undefined symbol {}", symbol.name);
+            bail!("cannot relocate to undefined symbol {:?}", symbol.name);
         }
 
         // Look up target section's VA from its header
+        let target_section = SectionIdx(target_section as usize - 1);
+
         let target_section = all_sections
             .iter()
             .find(|s| {
                 s.id.object_idx == section.id.object_idx
-                    && s.id.section_idx == (target_section - 1) as usize
+                    && s.id.section_idx == target_section
             })
             .with_context(|| {
                 format!(
-                    "target section {target_section} in object {} not found for relocation {reloc:?}",
+                    "target section {target_section:?} in object {:?} not found for relocation {reloc:?}",
                     section.id.object_idx
                 )
             })?;
 
-        let target_address =
-            image_base + target_section.header.virtual_address as u64 + symbol.entry.value as u64;
+        let target_address = image_base
+            + target_section.header.virtual_address as u64
+            + symbol.value as u64;
 
         // Apply relocation at offset
         match reloc.relocation_type {
@@ -162,29 +168,61 @@ fn process_all_relocations<'a>(
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let file_data = cli
+    let file_data: Vec<_> = cli
         .input_files
         .into_iter()
-        .map(|file_path| std::fs::read(file_path))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|file_path| std::fs::read(&file_path).map(|data| (file_path, data)))
+        .try_collect()?;
 
     let mut object_files = file_data
         .iter()
-        .map(|file_data| CoffFile::parse(&mut file_data.as_slice()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!(e))?;
+        .map(|(file_path, file_data)| -> anyhow::Result<Vec<CoffFile>> {
+            match file_path
+                .extension()
+                .map(|s| s.to_string_lossy())
+                .as_deref()
+            {
+                Some("lib") => {
+                    let archive = CoffArchive::parse(&mut file_data.as_slice())
+                        .map_err(|e| anyhow::anyhow!(e))
+                        .with_context(|| format!("error parsing archive {file_path:?}"))?;
+
+                    Ok(archive
+                        .members
+                        .into_iter()
+                        .map(|m| {
+                            CoffFile::parse(&mut &m.data[..])
+                                .map_err(|e| anyhow::anyhow!(e))
+                                .with_context(|| {
+                                    format!("error parsing archive member of {file_path:?}")
+                                })
+                        })
+                        .try_collect()?)
+                }
+                Some("obj") => {
+                    let obj = CoffFile::parse(&mut file_data.as_slice())
+                        .map_err(|e| anyhow::anyhow!(e))
+                        .with_context(|| format!("error parsing object {file_path:?}"))?;
+
+                    Ok(vec![obj])
+                }
+                other => bail!("unknown extension {other:?}"),
+            }
+        })
+        .flatten_ok()
+        .collect::<Result<Vec<_>, _>>()?;
 
     for (object_file_idx, object_file) in object_files.iter_mut().enumerate() {
         for section in &mut object_file.sections {
-            section.id.object_idx = object_file_idx;
+            section.id.object_idx = ObjectIdx(object_file_idx);
         }
     }
 
-    println!("{object_files:#?}");
+    // println!("{object_files:#?}");
 
     // Collect all symbols into global symbol table
     let global_symbols = collect_global_symbols(&object_files)?;
-    dbg!(&global_symbols);
+    // dbg!(&global_symbols);
 
     let mut sections = object_files
         .iter()
@@ -313,7 +351,11 @@ fn collect_global_symbols<'a, 'b: 'a>(
 
     for (idx, obj_file) in object_files.into_iter().enumerate() {
         if let Some(symbol_table) = &obj_file.symbol_table {
-            global_symbols.add(symbol_table, obj_file.string_table.as_ref(), idx)?;
+            global_symbols.add_all(
+                symbol_table,
+                obj_file.string_table.as_ref(),
+                coff::ObjectIdx(idx),
+            )?;
         }
     }
 
