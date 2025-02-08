@@ -215,15 +215,61 @@ impl<'a> GlobalSymbolTable<'a> {
         }
     }
 
-    // // Get a symbol by index from its original symbol table
-    // pub fn get_local_symbol_named(
-    //     &self,
-    //     object_idx: ObjectIdx,
-    //     name: &str,
-    // ) -> Option<&SymbolTableEntry> {
-    //     match self.local_symbols.get(&object_idx) {
-    //         Some(obj_symbols) => obj_symbols.get_named(name),
-    //         None => None,
-    //     }
-    // }
+    pub fn resolve_symbols(
+        &mut self,
+        string_tables: &HashMap<ObjectIdx, &'a StringTable<'a>>,
+    ) -> anyhow::Result<()> {
+        // Clone the local_symbols keys since we need to modify the map while iterating
+        let object_indices: Vec<_> = self.local_symbols.keys().cloned().collect();
+
+        for object_idx in object_indices {
+            let local_table = self.local_symbols.get_mut(&object_idx).unwrap();
+            
+            // Need to process each symbol in the local table
+            for symbol in &mut local_table.symbols {
+                match symbol {
+                    LocalSymbol::External { entry, resolution } => {
+                        // Get symbol name
+                        let name = entry.name.as_str(string_tables.get(&object_idx).copied())
+                            .context("could not resolve external symbol name")?;
+                        
+                        // Look up in global symbols table
+                        if let Some(global_sym) = self.global_symbols.get(name) {
+                            if let Some(def) = &global_sym.definition {
+                                // Found a definition, resolve it
+                                *resolution = Some(def.clone());
+                            }
+                        }
+                    }
+                    LocalSymbol::Weak { name, resolution, characteristics, .. } => {
+                        // Look up in global symbols table
+                        if let Some(global_sym) = self.global_symbols.get(name) {
+                            if let Some(def) = &global_sym.definition {
+                                match characteristics {
+                                    WeakExternalCharacteristics::NoLibrarySearch => {
+                                        // Only resolve if symbol is from the same object file
+                                        if def.object_idx == object_idx {
+                                            *resolution = Some(def.clone());
+                                        }
+                                    }
+                                    WeakExternalCharacteristics::LibrarySearch => {
+                                        // Resolve from any object file
+                                        *resolution = Some(def.clone());
+                                    }
+                                    WeakExternalCharacteristics::Alias => {
+                                        // Don't resolve - alternate symbol will be used directly
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    LocalSymbol::Static { .. } => {
+                        // Static symbols don't need resolution
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }

@@ -81,7 +81,18 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Collect all symbols into global symbol table
-    let global_symbols = collect_global_symbols(&object_files)?;
+    let mut global_symbols = collect_global_symbols(&object_files)?;
+    
+    // Build map of string tables
+    let string_tables: HashMap<_, _> = object_files.iter()
+        .enumerate()
+        .filter_map(|(idx, obj)| {
+            obj.string_table.as_ref().map(|st| (ObjectIdx(idx), st))
+        })
+        .collect();
+    
+    // Resolve all symbol references
+    global_symbols.resolve_symbols(&string_tables)?;
 
     let mut sections = object_files
         .iter()
