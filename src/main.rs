@@ -10,7 +10,7 @@ use coff::symbol_table::SymbolTableEntry;
 use coff::{CoffFile, CoffSection, ObjectIdx, SectionId, SectionIdx};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
-use link::relocations::process_all_relocations;
+use link::relocations::apply_relocations;
 use link::symbol_table::{GlobalSymbolTable, LocalSymbol};
 use parse::{Layout, Parse, Write};
 use pe::{DosHeader, PeFile};
@@ -36,55 +36,52 @@ fn main() -> anyhow::Result<()> {
         .map(|file_path| std::fs::read(&file_path).map(|data| (file_path, data)))
         .try_collect()?;
 
-    let mut object_files = file_data
-        .iter()
-        .map(|(file_path, file_data)| -> anyhow::Result<Vec<CoffFile>> {
-            match file_path
-                .extension()
-                .map(|s| s.to_string_lossy())
-                .as_deref()
-            {
-                Some("lib") => {
-                    let archive = CoffArchive::parse(&mut file_data.as_slice())
-                        .map_err(|e| anyhow::anyhow!(e))
-                        .with_context(|| format!("error parsing archive {file_path:?}"))?;
+    let mut input_object_files = vec![];
+    let mut library_object_files = vec![];
 
-                    Ok(archive
-                        .members
-                        .into_iter()
-                        .map(|m| {
-                            CoffFile::parse(&mut &m.data[..])
-                                .map_err(|e| anyhow::anyhow!(e))
-                                .with_context(|| {
-                                    format!("error parsing archive member of {file_path:?}")
-                                })
-                        })
-                        .try_collect()?)
-                }
-                Some("obj") => {
-                    let obj = CoffFile::parse(&mut file_data.as_slice())
-                        .map_err(|e| anyhow::anyhow!(e))
-                        .with_context(|| format!("error parsing object {file_path:?}"))?;
+    for (file_path, file_data) in &file_data {
+        match file_path
+            .extension()
+            .map(|s| s.to_string_lossy())
+            .as_deref()
+        {
+            Some("lib") => {
+                let archive = CoffArchive::parse(&mut file_data.as_slice())
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .with_context(|| format!("error parsing archive {file_path:?}"))?;
 
-                    Ok(vec![obj])
+                for member in archive.members {
+                    let library_object = CoffFile::parse(&mut &member.data[..])
+                        .map_err(|e| anyhow::anyhow!(e))
+                        .with_context(|| {
+                            format!("error parsing archive member of {file_path:?}")
+                        })?;
+
+                    library_object_files.push(library_object);
                 }
-                other => bail!("unknown extension {other:?}"),
             }
-        })
-        .flatten_ok()
-        .collect::<Result<Vec<_>, _>>()?;
+            Some("obj") => {
+                let obj = CoffFile::parse(&mut file_data.as_slice())
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .with_context(|| format!("error parsing object {file_path:?}"))?;
 
-    for (object_file_idx, object_file) in object_files.iter_mut().enumerate() {
+                input_object_files.push(obj)
+            }
+            other => bail!("unknown extension {other:?}"),
+        }
+    }
+
+    for (object_file_idx, object_file) in input_object_files.iter_mut().enumerate() {
         for section in &mut object_file.sections {
             section.id.object_idx = ObjectIdx(object_file_idx);
         }
     }
 
     // Collect all symbols into global symbol table
-    let mut global_symbols = collect_global_symbols(&object_files)?;
+    let mut global_symbols = collect_global_symbols(&input_object_files)?;
 
     // Build map of string tables
-    let string_tables: HashMap<_, _> = object_files
+    let string_tables: HashMap<_, _> = input_object_files
         .iter()
         .enumerate()
         .filter_map(|(idx, obj)| obj.string_table.as_ref().map(|st| (ObjectIdx(idx), st)))
@@ -93,12 +90,12 @@ fn main() -> anyhow::Result<()> {
     // Resolve all symbol references
     global_symbols.resolve_symbols(&string_tables)?;
 
-    let mut sections = object_files
+    let mut sections = input_object_files
         .iter()
         .flat_map(|o| o.sections.clone())
         .collect_vec();
 
-    process_all_relocations(
+    apply_relocations(
         &mut sections,
         &global_symbols,
         0x400000, // Image base
