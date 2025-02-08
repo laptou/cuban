@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::{borrow::Cow, path::PathBuf, str::FromStr};
 
@@ -111,8 +111,16 @@ fn main() -> anyhow::Result<()> {
     let package_major_version = u8::from_str(package_major_version).unwrap();
     let package_minor_version = u8::from_str(package_minor_version).unwrap();
 
-    // Find entry point
-    let entry_point = find_entry_point(&input_object_files, &global_symbols)?;
+    // Find entry point and trace symbol usage
+    let (entry_point_def, symbol_usage) = find_entry_point(&input_object_files, &global_symbols)?;
+    
+    println!("Used symbols: {:?}", symbol_usage.used_symbols);
+    println!("Undefined symbols: {:?}", symbol_usage.undefined_symbols);
+
+    let entry_point = match entry_point_def {
+        link::symbol_table::GlobalSymbolDefinition::Simple(simple) => simple.entry.value,
+        _ => bail!("entry point has unexpected definition type"),
+    };
 
     let mut pe_file = PeFile {
         dos_header: DosHeader { e_lfanew: 0 },
@@ -231,18 +239,93 @@ fn collect_global_symbols<'a, 'b: 'a>(
     Ok(global_symbols)
 }
 
+#[derive(Debug, Default)]
+struct SymbolUsage<'a> {
+    // Symbols that are defined and used
+    used_symbols: HashSet<&'a str>,
+    // Symbols that are used but not defined
+    undefined_symbols: HashSet<&'a str>,
+}
+
+fn trace_symbol_usage<'a>(
+    section: &CoffSection<'_>,
+    symbol: &'a SymbolTableEntry,
+    global_symbols: &'a GlobalSymbolTable<'a>,
+    string_tables: &HashMap<ObjectIdx, &'a StringTable<'a>>,
+    usage: &mut SymbolUsage<'a>,
+) -> anyhow::Result<()> {
+    // Get symbol name
+    let name = symbol.name.as_str(string_tables.get(&section.id.object_idx).copied())
+        .context("could not resolve symbol name")?;
+
+    // Skip if we've already processed this symbol
+    if !usage.used_symbols.insert(name) {
+        return Ok(());
+    }
+
+    // Process relocations that reference other symbols
+    for reloc in &section.relocations {
+        if let Some(local_sym) = global_symbols.get_local_symbol(
+            section.id.object_idx,
+            SymbolIdx(reloc.symbol_table_index as usize),
+        ) {
+            match local_sym {
+                LocalSymbol::External { entry, resolution } => {
+                    let sym_name = entry.name.as_str(string_tables.get(&section.id.object_idx).copied())
+                        .context("could not resolve symbol name")?;
+                    
+                    if resolution.is_none() {
+                        usage.undefined_symbols.insert(sym_name);
+                    } else {
+                        // Recursively trace the resolved symbol
+                        if let Some(def) = global_symbols.get_global(sym_name)
+                            .and_then(|s| s.definition.as_ref()) {
+                            match def {
+                                link::symbol_table::GlobalSymbolDefinition::Simple(simple) => {
+                                    trace_symbol_usage(section, simple.entry, global_symbols, string_tables, usage)?;
+                                }
+                                _ => continue,
+                            }
+                        }
+                    }
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn find_entry_point<'a>(
     object_files: &[CoffFile<'a>],
-    global_symbols: &GlobalSymbolTable<'a>,
-) -> anyhow::Result<u32> {
+    global_symbols: &'a GlobalSymbolTable<'a>,
+) -> anyhow::Result<(&'a link::symbol_table::GlobalSymbolDefinition<'a>, SymbolUsage<'a>)> {
+    // Build string tables map
+    let string_tables: HashMap<_, _> = object_files
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, obj)| obj.string_table.as_ref().map(|st| (ObjectIdx(idx), st)))
+        .collect();
+
     // Look for _main or mainCRTStartup symbol
     for name in ["_main", "mainCRTStartup"] {
         if let Some(symbol) = global_symbols.get_global(name) {
             if let Some(def) = &symbol.definition {
                 match def {
                     link::symbol_table::GlobalSymbolDefinition::Simple(simple) => {
-                        // Found entry point symbol
-                        return Ok(simple.entry.value);
+                        // Found entry point symbol - trace its usage
+                        let mut usage = SymbolUsage::default();
+                        
+                        // Find the section containing this symbol
+                        for obj_file in object_files {
+                            for section in &obj_file.sections {
+                                if section.id.section_idx == SectionIdx(simple.entry.section_number as usize - 1) {
+                                    trace_symbol_usage(section, simple.entry, global_symbols, &string_tables, &mut usage)?;
+                                    return Ok((def, usage));
+                                }
+                            }
+                        }
                     }
                     _ => continue,
                 }
