@@ -201,7 +201,7 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CoffSectionId {
+pub struct SectionId {
     pub object_idx: ObjectIdx,
     pub section_idx: SectionIdx,
 }
@@ -209,7 +209,7 @@ pub struct CoffSectionId {
 #[derive(Debug, Clone)]
 pub struct CoffSection<'a> {
     /// Not parsed from file, but assigned by `cuban` for tracking
-    pub id: CoffSectionId,
+    pub id: SectionId,
 
     pub header: CoffSectionHeader<'a>,
     pub data: Option<Cow<'a, [u8]>>,
@@ -245,7 +245,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             .into_iter()
             .enumerate()
             .map(|(idx, header)| CoffSection {
-                id: CoffSectionId {
+                id: SectionId {
                     object_idx: ObjectIdx(0),
                     section_idx: SectionIdx(idx),
                 },

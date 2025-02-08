@@ -2,13 +2,16 @@ use std::{borrow::Cow, collections::HashMap};
 
 use anyhow::{bail, Context};
 
-use crate::coff::{
-    string_table::StringTable,
-    symbol_table::{
-        AuxSymbolRecord, Name, StorageClass, SymbolTable, SymbolTableEntry,
-        WeakExternalCharacteristics,
+use crate::{
+    coff::{
+        string_table::StringTable,
+        symbol_table::{
+            AuxSymbolRecord, AuxSymbolRecordSection, ComdatSelection, Name, StorageClass,
+            SymbolTable, SymbolTableEntry, WeakExternalCharacteristics,
+        },
+        CoffSection, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
     },
-    ObjectIdx, SectionIdx, SymbolIdx,
+    flags::SectionCharacteristics,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -22,19 +25,21 @@ pub enum LocalSymbol<'a> {
     Static {
         entry: &'a SymbolTableEntry,
     },
+    ComdatStatic {
+        entry: &'a SymbolTableEntry,
+        selection_mode: ComdatSelection,
+    },
     External {
         entry: &'a SymbolTableEntry,
         resolution: Option<GlobalSymbolDefinition<'a>>,
     },
     Weak {
         name: &'a str,
-
-        /// Set after symbol resolution is complete
-        resolution: Option<GlobalSymbolDefinition<'a>>,
-
         /// The symbol to use if the weak symbol is not found
         alternate: &'a SymbolTableEntry,
 
+        /// Set after symbol resolution is complete
+        resolution: Option<GlobalSymbolDefinition<'a>>,
         characteristics: WeakExternalCharacteristics,
     },
 }
@@ -49,10 +54,6 @@ impl<'a> LocalSymbolTable<'a> {
     fn get_idx(&self, symbol_idx: SymbolIdx) -> Option<LocalSymbol<'a>> {
         self.symbols.get(symbol_idx.0).cloned()
     }
-
-    // fn get_named(&self, name: &str) -> Option<&'a SymbolTableEntry> {
-    //     self.name_map.get(&Cow::Borrowed(name)).copied()
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -68,9 +69,7 @@ pub struct GlobalSymbol<'a> {
     /// The name of this symbol
     pub name: &'a str,
     /// Multiple definitions for COMDAT symbols
-    pub definitions: Vec<GlobalSymbolDefinition<'a>>,
-    /// Optional COMDAT selection mode
-    pub comdat_selection: Option<ComdatSelection>,
+    pub definition: Option<GlobalSymbolDefinition<'a>>,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +95,7 @@ impl<'a> GlobalSymbolTable<'a> {
         &mut self,
         symbol_table: &'a SymbolTable,
         string_table: Option<&'a StringTable<'a>>,
+        section_map: &HashMap<SectionId, &CoffSection<'a>>,
         object_idx: ObjectIdx,
     ) -> anyhow::Result<()> {
         // Process each symbol in the table
@@ -113,63 +113,29 @@ impl<'a> GlobalSymbolTable<'a> {
                     let is_defined = entry.section_number > 0;
 
                     if is_defined {
-                        // Get COMDAT selection mode from section aux record if present
-                        let comdat_selection = if entry.section_number > 0 {
-                            let section_idx = entry.section_number as usize - 1;
-                            let section_symbol = symbol_table.entries.iter()
-                                .find(|e| e.storage_class == StorageClass::Section && 
-                                         e.section_number == entry.section_number as i16);
-                            
-                            if let Some(section_symbol) = section_symbol {
-                                // Check if section has COMDAT flag
-                                if let Some(&AuxSymbolRecord::Section { selection, characteristics, .. }) = section_symbol.aux_symbols.first() {
-                                    if characteristics.contains(SectionCharacteristics::LNK_COMDAT) {
-                                        Some(selection)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
                         let gs = self.global_symbols.entry(name).or_insert(GlobalSymbol {
                             name,
-                            definitions: Vec::new(),
-                            comdat_selection: None,
+                            definition: None,
                         });
 
-                        // Check COMDAT selection mode matches if already set
-                        if let Some(existing_mode) = gs.comdat_selection {
-                            if let Some(new_mode) = comdat_selection {
-                                if existing_mode != new_mode {
-                                    bail!("conflicting COMDAT selection modes for symbol {name}: {existing_mode:?} vs {new_mode:?}");
-                                }
-                            }
-                        } else {
-                            gs.comdat_selection = comdat_selection;
-                        }
-
                         // Add this definition
-                        gs.definitions.push(GlobalSymbolDefinition {
+                        let existing_def = gs.definition.replace(GlobalSymbolDefinition {
                             // section_number uses 1-based indexing
                             section_idx: SectionIdx(entry.section_number as usize - 1),
                             object_idx,
                             entry,
                         });
+
+                        if existing_def.is_some() {
+                            bail!("conflicting global definitions for symbol {name}")
+                        }
                     } else {
                         // put a stub in the GST
                         self.global_symbols.insert(
                             name,
                             GlobalSymbol {
                                 name,
-                                definitions: Vec::new(),
-                                comdat_selection: None,
+                                definition: None,
                             },
                         );
                     }
@@ -211,7 +177,33 @@ impl<'a> GlobalSymbolTable<'a> {
                         },
                     )?;
                 }
-                StorageClass::Static | StorageClass::Label => {
+                StorageClass::Static | StorageClass::Label | StorageClass::Section => {
+                    // is this a section symbol? if so, we need to check for COMDAT sections
+                    if let Some(section_info) = entry.section_info() {
+                        let section_id = SectionId {
+                            object_idx,
+                            section_idx: SectionIdx(entry.section_number as usize - 1),
+                        };
+
+                        let section = section_map
+                            .get(&section_id)
+                            .context("could not find section for symbol")?;
+
+                        let flags = section.header.characteristics;
+
+                        if flags.contains(SectionCharacteristics::LNK_COMDAT) {
+                            // we have a COMDAT section
+                            let selection_mode = section_info.selection;
+
+                            self.local_symbols.entry(object_idx).or_default().insert(
+                                LocalSymbol::ComdatStatic {
+                                    entry,
+                                    selection_mode,
+                                },
+                            )?;
+                        }
+                    }
+
                     // static symbols are local
                     self.local_symbols
                         .entry(object_idx)
@@ -261,67 +253,37 @@ impl<'a> GlobalSymbolTable<'a> {
 
         for object_idx in object_indices {
             let local_table = self.local_symbols.get_mut(&object_idx).unwrap();
-            
+
             // Need to process each symbol in the local table
             for symbol in &mut local_table.symbols {
                 match symbol {
                     LocalSymbol::External { entry, resolution } => {
-                        // Get symbol name
-                        let name = entry.name.as_str(string_tables.get(&object_idx).copied())
-                            .context("could not resolve external symbol name")?;
-                        
-                        // Look up in global symbols table
-                        if let Some(global_sym) = self.global_symbols.get(name) {
-                            if !global_sym.definitions.is_empty() {
-                                // Select definition based on COMDAT selection mode or require exactly one
-                                let selected_def = match global_sym.comdat_selection {
-                                    Some(ComdatSelection::Any) => {
-                                        // Pick first definition
-                                        Some(global_sym.definitions[0].clone())
-                                    }
-                                    Some(ComdatSelection::Largest) => {
-                                        // Pick definition with largest size
-                                        global_sym.definitions.iter()
-                                            .max_by_key(|def| def.entry.value)
-                                            .cloned()
-                                    }
-                                    Some(ComdatSelection::SameSize) => {
-                                        // Check all definitions have same size
-                                        let first_size = global_sym.definitions[0].entry.value;
-                                        if global_sym.definitions.iter().all(|def| def.entry.value == first_size) {
-                                            Some(global_sym.definitions[0].clone())
-                                        } else {
-                                            bail!("COMDAT symbol {name} has definitions with different sizes");
-                                        }
-                                    }
-                                    Some(ComdatSelection::ExactMatch) => {
-                                        // TODO: Implement exact content matching
-                                        bail!("COMDAT ExactMatch selection not implemented");
-                                    }
-                                    Some(ComdatSelection::NoDuplicates) => {
-                                        if global_sym.definitions.len() > 1 {
-                                            bail!("COMDAT symbol {name} has multiple definitions with NoDuplicates selection");
-                                        }
-                                        Some(global_sym.definitions[0].clone())
-                                    }
-                                    Some(ComdatSelection::Associative) => {
-                                        // TODO: Implement associative selection
-                                        bail!("COMDAT Associative selection not implemented");
-                                    }
-                                    None => {
-                                        // No COMDAT - require exactly one definition
-                                        if global_sym.definitions.len() != 1 {
-                                            bail!("non-COMDAT symbol {name} has multiple definitions");
-                                        }
-                                        Some(global_sym.definitions[0].clone())
-                                    }
-                                }?;
-                                
-                                *resolution = Some(selected_def);
+                        if resolution.is_none() {
+                            // Get symbol name
+                            let name = entry
+                                .name
+                                .as_str(string_tables.get(&object_idx).copied())
+                                .context("could not resolve external symbol name")?;
+
+                            // Look up in global symbols table
+                            if let Some(global_sym) = self.global_symbols.get(name) {
+                                let global_def =
+                                    global_sym.definition.clone().with_context(|| {
+                                        format!("global symbol {name} has no definition")
+                                    })?;
+
+                                resolution.insert(global_def);
+                            } else {
+                                bail!("cannot resolve external symbol {name}");
                             }
                         }
                     }
-                    LocalSymbol::Weak { name, resolution, characteristics, .. } => {
+                    LocalSymbol::Weak {
+                        name,
+                        resolution,
+                        characteristics,
+                        ..
+                    } => {
                         // Look up in global symbols table
                         if let Some(global_sym) = self.global_symbols.get(name) {
                             if let Some(def) = &global_sym.definition {
@@ -343,7 +305,7 @@ impl<'a> GlobalSymbolTable<'a> {
                             }
                         }
                     }
-                    LocalSymbol::Static { .. } => {
+                    LocalSymbol::Static { .. } | LocalSymbol::ComdatStatic { .. } => {
                         // Static symbols don't need resolution
                     }
                 }

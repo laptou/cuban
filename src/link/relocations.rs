@@ -2,7 +2,11 @@ use std::collections::HashMap;
 
 use anyhow::{bail, Context};
 
-use crate::coff::{relocations::{I386RelocationType, RelocationType}, symbol_table::SymbolTableEntry, CoffSection, CoffSectionId, ObjectIdx, SectionIdx, SymbolIdx};
+use crate::coff::{
+    relocations::{I386RelocationType, RelocationType},
+    symbol_table::SymbolTableEntry,
+    CoffSection, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
+};
 
 use super::symbol_table::{GlobalSymbolTable, LocalSymbol};
 
@@ -63,7 +67,7 @@ fn process_section_relocations<'a>(
     global_symbols: &GlobalSymbolTable<'a>,
     image_base: u64,
     section_rva: u64,
-    section_map: &HashMap<CoffSectionId, &CoffSection<'a>>,
+    section_map: &HashMap<SectionId, &CoffSection<'a>>,
 ) -> anyhow::Result<()> {
     // Skip if no relocations
     if section.relocations.is_empty() {
@@ -80,11 +84,11 @@ fn process_section_relocations<'a>(
     for reloc in &section.relocations {
         // Get the symbol being referenced
         let local_symbol = global_symbols
-          .get_local_symbol(section.id.object_idx, SymbolIdx(reloc.symbol_table_index as usize))
-          .with_context(|| format!(
-              "invalid symbol reference in relocation: {reloc:?} object_idx = {:?} symbol_table_idx = {:?}",
-              section.id.object_idx, reloc.symbol_table_index
-          ))?;
+            .get_local_symbol(section.id.object_idx, SymbolIdx(reloc.symbol_table_index as usize))
+            .with_context(|| format!(
+                "invalid symbol reference in relocation: {reloc:?} object_idx = {:?} symbol_table_idx = {:?}",
+                section.id.object_idx, reloc.symbol_table_index
+            ))?;
 
         // local symbol might be weak, external, etc., so we need to resolve
         let (target_symbol, target_section) =
@@ -132,14 +136,14 @@ fn process_section_relocations<'a>(
 
 fn resolve_local_symbol<'a: 'b, 'b>(
     local_symbol: &LocalSymbol<'a>,
-    section_map: &'b HashMap<CoffSectionId, &CoffSection<'a>>,
+    section_map: &'b HashMap<SectionId, &CoffSection<'a>>,
     object_idx: ObjectIdx,
 ) -> anyhow::Result<(&'a SymbolTableEntry, &'b CoffSection<'a>)> {
     match local_symbol {
         LocalSymbol::External { entry, resolution } => {
             // is this external symbol defined in this object?
             if entry.section_number > 0 {
-                let section_id = CoffSectionId {
+                let section_id = SectionId {
                     object_idx,
                     section_idx: SectionIdx(entry.section_number as usize - 1),
                 };
@@ -156,7 +160,7 @@ fn resolve_local_symbol<'a: 'b, 'b>(
                     .as_ref()
                     .context("external symbol is not resolved")?;
 
-                let section_id = CoffSectionId {
+                let section_id = SectionId {
                     object_idx: gs.object_idx,
                     section_idx: gs.section_idx,
                 };
@@ -168,18 +172,6 @@ fn resolve_local_symbol<'a: 'b, 'b>(
                 return Ok((gs.entry, section));
             }
         }
-        LocalSymbol::Static { entry } => {
-            let section_id = CoffSectionId {
-                object_idx,
-                section_idx: SectionIdx(entry.section_number as usize - 1),
-            };
-
-            let section = section_map
-                .get(&section_id)
-                .context("could not resolve target section")?;
-
-            return Ok((*entry, section));
-        }
         LocalSymbol::Weak {
             resolution,
             alternate,
@@ -188,7 +180,7 @@ fn resolve_local_symbol<'a: 'b, 'b>(
             // for weak symbols, use the resolution if we have one,
             // otherwise fall back to the local alternate
             if let Some(resolution) = resolution.as_ref() {
-                let section_id = CoffSectionId {
+                let section_id = SectionId {
                     object_idx: resolution.object_idx,
                     section_idx: resolution.section_idx,
                 };
@@ -200,7 +192,7 @@ fn resolve_local_symbol<'a: 'b, 'b>(
                 return Ok((resolution.entry, section));
             }
 
-            let section_id = CoffSectionId {
+            let section_id = SectionId {
                 object_idx,
                 section_idx: SectionIdx(alternate.section_number as usize - 1),
             };
@@ -210,6 +202,30 @@ fn resolve_local_symbol<'a: 'b, 'b>(
                 .context("could not resolve target section")?;
 
             return Ok((*alternate, section));
+        }
+        LocalSymbol::Static { entry } => {
+            let section_id = SectionId {
+                object_idx,
+                section_idx: SectionIdx(entry.section_number as usize - 1),
+            };
+
+            let section = section_map
+                .get(&section_id)
+                .context("could not resolve target section")?;
+
+            return Ok((*entry, section));
+        }
+        LocalSymbol::ComdatStatic { entry, .. } => {
+            let section_id = SectionId {
+                object_idx,
+                section_idx: SectionIdx(entry.section_number as usize - 1),
+            };
+
+            let section = section_map
+                .get(&section_id)
+                .context("could not resolve target section")?;
+
+            return Ok((*entry, section));
         }
     }
 }

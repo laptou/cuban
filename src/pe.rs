@@ -11,7 +11,7 @@ use winnow::prelude::*;
 use winnow::token::take;
 
 use crate::coff::CoffSection;
-use crate::coff::CoffSectionId;
+use crate::coff::SectionId;
 use crate::coff::ObjectIdx;
 use crate::coff::SectionIdx;
 use crate::coff::SymbolIdx;
@@ -601,7 +601,7 @@ impl<'a> Parse<'a> for PeFile<'a> {
             .into_iter()
             .enumerate()
             .map(|(idx, header)| CoffSection {
-                id: CoffSectionId {
+                id: SectionId {
                     object_idx: ObjectIdx(0),
                     section_idx: SectionIdx(idx),
                 },

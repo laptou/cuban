@@ -7,7 +7,7 @@ use clap::Parser;
 use coff::archive::CoffArchive;
 use coff::relocations::{I386RelocationType, RelocationType};
 use coff::symbol_table::SymbolTableEntry;
-use coff::{CoffFile, CoffSection, CoffSectionId, ObjectIdx, SectionIdx};
+use coff::{CoffFile, CoffSection, ObjectIdx, SectionId, SectionIdx};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
 use link::relocations::process_all_relocations;
@@ -82,15 +82,14 @@ fn main() -> anyhow::Result<()> {
 
     // Collect all symbols into global symbol table
     let mut global_symbols = collect_global_symbols(&object_files)?;
-    
+
     // Build map of string tables
-    let string_tables: HashMap<_, _> = object_files.iter()
+    let string_tables: HashMap<_, _> = object_files
+        .iter()
         .enumerate()
-        .filter_map(|(idx, obj)| {
-            obj.string_table.as_ref().map(|st| (ObjectIdx(idx), st))
-        })
+        .filter_map(|(idx, obj)| obj.string_table.as_ref().map(|st| (ObjectIdx(idx), st)))
         .collect();
-    
+
     // Resolve all symbol references
     global_symbols.resolve_symbols(&string_tables)?;
 
@@ -219,10 +218,13 @@ fn collect_global_symbols<'a, 'b: 'a>(
 
     for (idx, obj_file) in object_files.into_iter().enumerate() {
         if let Some(symbol_table) = &obj_file.symbol_table {
+            let section_map = obj_file.sections.iter().map(|s| (s.id, s)).collect();
+
             global_symbols.add_all(
                 symbol_table,
                 obj_file.string_table.as_ref(),
-                coff::ObjectIdx(idx),
+                &section_map,
+                ObjectIdx(idx),
             )?;
         }
     }

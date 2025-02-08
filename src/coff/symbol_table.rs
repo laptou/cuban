@@ -41,6 +41,22 @@ pub struct SymbolTableEntry {
     pub aux_symbols: Vec<AuxSymbolRecord>,
 }
 
+impl SymbolTableEntry {
+    /// Returns the auxiliary symbol record for the section definition if this
+    /// symbol refers to a section.
+    pub fn section_info(&self) -> Option<&AuxSymbolRecordSection> {
+        match self.storage_class {
+            StorageClass::Static | StorageClass::Section => {
+                self.aux_symbols.iter().find_map(|a| match a {
+                    AuxSymbolRecord::Section(sect) => Some(sect),
+                    _ => None,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Name {
     Short([u8; 8]),
@@ -109,7 +125,7 @@ pub enum WeakExternalCharacteristics {
     Alias = 3,
 }
 
-#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
+#[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ComdatSelection {
     NoDuplicates = 1,
@@ -118,6 +134,16 @@ pub enum ComdatSelection {
     ExactMatch = 4,
     Associative = 5,
     Largest = 6,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AuxSymbolRecordSection {
+    pub length: u32,
+    pub number_of_relocations: u16,
+    pub number_of_line_numbers: u16,
+    pub checksum: u32,
+    pub number: u16,
+    pub selection: ComdatSelection,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -139,14 +165,7 @@ pub enum AuxSymbolRecord {
     File {
         filename: [u8; 18],
     },
-    Section {
-        length: u32,
-        number_of_relocations: u16,
-        number_of_line_numbers: u16,
-        checksum: u32,
-        number: u16,
-        selection: ComdatSelection,
-    },
+    Section(AuxSymbolRecordSection),
     Raw([u8; 18]), // For unhandled auxiliary records
 }
 
@@ -212,14 +231,14 @@ impl Write for AuxSymbolRecord {
             Self::File { filename } => {
                 out.put_slice(filename);
             }
-            Self::Section {
+            Self::Section(AuxSymbolRecordSection {
                 length,
                 number_of_relocations,
                 number_of_line_numbers,
                 checksum,
                 number,
                 selection,
-            } => {
+            }) => {
                 out.put_u32_le(*length);
                 out.put_u16_le(*number_of_relocations);
                 out.put_u16_le(*number_of_line_numbers);
@@ -410,19 +429,19 @@ impl AuxSymbolRecord {
                     .context(StrContext::Label("number"))
                     .parse_next(input)?;
                 let selection_val = input.next_token().unwrap();
-                let selection = ComdatSelection::from_u8(selection_val)
-                    .unwrap_or(ComdatSelection::Any);
+                let selection =
+                    ComdatSelection::from_u8(selection_val).unwrap_or(ComdatSelection::Any);
                 take(3usize)
                     .context(StrContext::Label("unused"))
                     .parse_next(input)?;
-                Ok(AuxSymbolRecord::Section {
+                Ok(AuxSymbolRecord::Section(AuxSymbolRecordSection {
                     length,
                     number_of_relocations,
                     number_of_line_numbers,
                     checksum,
                     number,
                     selection,
-                })
+                }))
             }
             _ => {
                 // Save raw bytes for unhandled aux record types
