@@ -17,122 +17,17 @@ use crate::{
     util::fmt::ByteStr,
 };
 
-use super::string_table::StringTable;
+use super::{string_table::StringTable, ObjectIdx, SymbolIdx};
 
 #[derive(Debug, Clone)]
 pub struct SymbolTable {
     pub entries: Vec<SymbolTableEntry>,
 }
 
-#[derive(Debug)]
-pub struct GlobalSymbolTable<'a> {
-    // Map from symbol name to symbol definition
-    symbols: HashMap<Cow<'a, str>, GlobalSymbol<'a>>,
-}
-
-#[derive(Debug)]
-pub struct GlobalSymbol<'a> {
-    // The actual symbol entry
-    pub entry: &'a SymbolTableEntry,
-    // The object file index this symbol came from
-    pub object_idx: usize,
-    // The resolved name
-    pub name: Cow<'a, str>,
-}
-
-impl<'a> GlobalSymbolTable<'a> {
-    pub fn new() -> Self {
-        Self {
-            symbols: HashMap::new(),
-        }
-    }
-
-    pub fn add(
-        &mut self,
-        symbol_table: &'a SymbolTable,
-        string_table: Option<&'a StringTable<'a>>,
-        object_idx: usize,
-    ) -> anyhow::Result<()> {
-        // Process each symbol in the table
-        for entry in &symbol_table.entries {
-            // Resolve the symbol name
-            let name = match &entry.name {
-                Name::Short(bytes) => {
-                    // Find null terminator or use whole slice
-                    let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-
-                    String::from_utf8_lossy(&bytes[..len])
-                }
-                Name::Long(offset) => {
-                    let string_table = string_table
-                        .context("Symbol uses long name but no string table provided")?;
-                    let name = string_table
-                        .get(*offset)
-                        .context("Invalid string table offset")?;
-                    Cow::Borrowed(name)
-                }
-            };
-
-            // Check for existing symbol
-            if let Some(existing) = self.symbols.get(&name) {
-                match (entry.storage_class, existing.entry.storage_class) {
-                    // External symbol already defined
-                    (StorageClass::External, StorageClass::External) => {
-                        if existing.entry.section_number > 0 && entry.section_number > 0 {
-                            bail!("Symbol {} already defined", name);
-                        }
-                        // Otherwise one is undefined (section 0) so this is ok
-                    }
-
-                    // Weak external - implement fallback logic
-                    (StorageClass::WeakExternal, _) => {
-                        // Keep existing symbol
-                        continue;
-                    }
-
-                    (StorageClass::Static, StorageClass::Static)
-                        if entry.value == 0 && existing.entry.value == 0 =>
-                    {
-                        // Static symbols w/ value 0 represent section names, ignore conflicts?
-                        continue;
-                    }
-
-                    // Other combinations are errors
-                    other => bail!("symbol {name} has conflicting storage classes: {other:?}"),
-                }
-            }
-
-            // Add to global table
-            self.symbols.insert(
-                name.clone(),
-                GlobalSymbol {
-                    entry,
-                    object_idx,
-                    name,
-                },
-            );
-        }
-
-        Ok(())
-    }
-
-    // Get a symbol by name
-    pub fn get(&self, name: &str) -> Option<&GlobalSymbol<'a>> {
-        self.symbols.get(name)
-    }
-
-    // Get a symbol by index from its original symbol table
-    pub fn get_by_index(&self, object_idx: usize, symbol_idx: usize) -> Option<&GlobalSymbol<'a>> {
-        self.symbols
-            .values()
-            .find(|sym| sym.object_idx == object_idx && sym.entry.offset == symbol_idx)
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct SymbolTableEntry {
     /// Offset within the symbol table
-    pub offset: usize,
+    pub offset: SymbolIdx,
     pub name: Name,
     pub value: u32,
     /// 1-based section index
@@ -383,7 +278,7 @@ impl<'a> Parse<'a> for SymbolTableEntry {
 
         let entry = SymbolTableEntry {
             // offset is not known here
-            offset: 0,
+            offset: SymbolIdx(0),
             name,
             value,
             section_number,
