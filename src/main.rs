@@ -80,6 +80,15 @@ fn main() -> anyhow::Result<()> {
     // Collect all symbols into global symbol table
     let mut global_symbols = collect_global_symbols(&input_object_files)?;
 
+    // Find entry point and trace symbol usage
+    let (entry_point_def, symbol_usage) = find_entry_point(&input_object_files, &global_symbols)?;
+    
+    println!("Used symbols: {:?}", symbol_usage.used_symbols);
+    println!("Undefined symbols: {:?}", symbol_usage.undefined_symbols);
+
+    // Prune unused symbols from global symbol table
+    global_symbols.retain_used(&symbol_usage.used_symbols);
+
     // Build map of string tables
     let string_tables: HashMap<_, _> = input_object_files
         .iter()

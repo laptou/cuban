@@ -155,6 +155,10 @@ fn get_comdat_info(
 }
 
 impl<'a> GlobalSymbolTable<'a> {
+    pub fn retain_used(&mut self, used_symbols: &HashSet<&'a str>) {
+        self.global_symbols.retain(|name, _| used_symbols.contains(name));
+    }
+
     pub fn new() -> Self {
         Self {
             global_symbols: HashMap::new(),
