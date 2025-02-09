@@ -36,8 +36,8 @@ fn main() -> anyhow::Result<()> {
         .map(|file_path| std::fs::read(&file_path).map(|data| (file_path, data)))
         .try_collect()?;
 
-    let mut input_object_files = vec![];
-    let mut library_object_files = vec![];
+    let mut input_object_files: Vec<CoffFile<'_>> = vec![];
+    let mut library_object_files: Vec<CoffFile<'_>> = vec![];
 
     for (file_path, file_data) in &file_data {
         match file_path
@@ -50,7 +50,9 @@ fn main() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!(e))
                     .with_context(|| format!("error parsing archive {file_path:?}"))?;
 
-                for member in archive.members {
+                for (idx, member) in archive.members.into_iter().enumerate() {
+                    dbg!(idx, &member.header);
+
                     let library_object = CoffFile::parse(&mut &member.data[..])
                         .map_err(|e| anyhow::anyhow!(e))
                         .with_context(|| {
@@ -59,38 +61,55 @@ fn main() -> anyhow::Result<()> {
 
                     library_object_files.push(library_object);
                 }
-            }
-            Some("obj") => {
-                let obj = CoffFile::parse(&mut file_data.as_slice())
-                    .map_err(|e| anyhow::anyhow!(e))
-                    .with_context(|| format!("error parsing object {file_path:?}"))?;
 
-                input_object_files.push(obj)
+                return Ok(());
             }
+            // Some("obj") => {
+            //     let obj = CoffFile::parse(&mut file_data.as_slice())
+            //         .map_err(|e| anyhow::anyhow!(e))
+            //         .with_context(|| format!("error parsing object {file_path:?}"))?;
+
+            //     input_object_files.push(obj)
+            // }
             other => bail!("unknown extension {other:?}"),
         }
     }
 
-    for (object_file_idx, object_file) in input_object_files.iter_mut().enumerate() {
+    let mut object_file_idx = 0;
+
+    for object_file in input_object_files.iter_mut() {
+        object_file.idx = ObjectIdx(object_file_idx);
+
         for section in &mut object_file.sections {
             section.id.object_idx = ObjectIdx(object_file_idx);
         }
+
+        object_file_idx += 1;
     }
+
+    for object_file in library_object_files.iter_mut() {
+        object_file.idx = ObjectIdx(object_file_idx);
+
+        for section in &mut object_file.sections {
+            section.id.object_idx = ObjectIdx(object_file_idx);
+        }
+
+        object_file_idx += 1;
+    }
+
+    let mut used_library_object_idxs = HashSet::new();
 
     // Collect all symbols into global symbol table
     let mut global_symbols = collect_global_symbols(&input_object_files)?;
 
     // Find entry point and trace symbol usage
-    let (_, symbol_usage) = find_entry_point(&input_object_files, &global_symbols)?;
+    let (_, mut symbol_usage) = find_entry_point(&input_object_files, &global_symbols)?;
 
     println!("Used symbols: {:?}", symbol_usage.used_symbols);
     println!("Undefined symbols: {:?}", symbol_usage.undefined_symbols);
 
-    // Prune unused symbols from global symbol table
-    global_symbols.retain_used(&symbol_usage.used_symbols);
-
     // Build map of string tables
-    let string_tables: HashMap<_, _> = input_object_files
+    let mut string_tables: HashMap<_, _> = input_object_files
         .iter()
         .enumerate()
         .filter_map(|(idx, obj)| obj.string_table.as_ref().map(|st| (ObjectIdx(idx), st)))
@@ -98,6 +117,9 @@ fn main() -> anyhow::Result<()> {
 
     // Keep resolving symbols until no more undefined symbols or no more resolutions possible
     loop {
+        // Prune unused symbols from global symbol table
+        global_symbols.retain_used(&symbol_usage.used_symbols);
+
         match global_symbols.resolve_symbols(&string_tables) {
             Ok(_) => break, // All symbols resolved
             Err(SymbolResolutionError::Other(other)) => return Err(other),
@@ -114,18 +136,60 @@ fn main() -> anyhow::Result<()> {
                 // Search libraries
                 for lib_obj in &library_object_files {
                     if let Some(symbol_table) = &lib_obj.symbol_table {
+                        // we've already included this object
+                        if used_library_object_idxs.contains(&lib_obj.idx) {
+                            continue;
+                        }
+
                         let section_map = lib_obj.sections.iter().map(|s| (s.id, s)).collect();
+                        let lib_str_table = lib_obj.string_table.as_ref();
 
                         // Only process symbols we need
                         for entry in &symbol_table.entries {
-                            if let Some(name) = entry.name.as_str(lib_obj.string_table.as_ref()) {
+                            let section_idx = if entry.section_number > 0 {
+                                SectionIdx(entry.section_number as usize - 1)
+                            } else {
+                                // symbol is declared here, but not defined here
+                                continue;
+                            };
+
+                            let section_id = SectionId {
+                                section_idx,
+                                object_idx: lib_obj.idx,
+                            };
+
+                            if let Some(name) = entry.name.as_str(lib_str_table) {
                                 if undefined_symbols.contains(name) {
+                                    println!(
+                                        "found undefined symbol {name} in library object file {:?}",
+                                        lib_obj.idx
+                                    );
+
                                     global_symbols.add_all(
                                         symbol_table,
                                         lib_obj.string_table.as_ref(),
                                         &section_map,
-                                        ObjectIdx(input_object_files.len()),
+                                        lib_obj.idx,
                                     )?;
+
+                                    if let Some(lib_str_table) = lib_str_table {
+                                        string_tables.insert(lib_obj.idx, lib_str_table);
+                                    }
+
+                                    let section = *section_map
+                                        .get(&section_id)
+                                        .context("could not get section for symbol")?;
+
+                                    trace_symbol_usage(
+                                        section,
+                                        entry,
+                                        &global_symbols,
+                                        &string_tables,
+                                        &mut symbol_usage,
+                                    )?;
+
+                                    used_library_object_idxs.insert(lib_obj.idx);
+
                                     break;
                                 }
                             }
@@ -136,7 +200,17 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let mut sections = input_object_files
+    global_symbols.select_comdat_symbols();
+
+    let mut used_object_files = input_object_files.clone();
+    used_object_files.extend(
+        library_object_files
+            .iter()
+            .filter(|o| used_library_object_idxs.contains(&o.idx))
+            .cloned(),
+    );
+
+    let mut sections = used_object_files
         .iter()
         .flat_map(|o| o.sections.clone())
         .collect_vec();
@@ -158,7 +232,7 @@ fn main() -> anyhow::Result<()> {
     let package_minor_version = u8::from_str(package_minor_version).unwrap();
 
     // Find entry point and trace symbol usage
-    let (entry_point_def, symbol_usage) = find_entry_point(&input_object_files, &global_symbols)?;
+    let (entry_point_def, symbol_usage) = find_entry_point(&used_object_files, &global_symbols)?;
 
     println!("Used symbols: {:?}", symbol_usage.used_symbols);
     println!("Undefined symbols: {:?}", symbol_usage.undefined_symbols);
@@ -301,10 +375,12 @@ fn trace_symbol_usage<'a: 'b, 'b>(
     string_tables: &'b HashMap<ObjectIdx, &'b coff::string_table::StringTable<'a>>,
     usage: &mut SymbolUsage<'a>,
 ) -> anyhow::Result<()> {
+    let symbol_object = section.id.object_idx;
+
     // Get symbol name
     let name = symbol
         .name
-        .as_str(string_tables.get(&section.id.object_idx).copied())
+        .as_str(string_tables.get(&symbol_object).copied())
         .context("could not resolve symbol name")?;
 
     // Skip if we've already processed this symbol
@@ -314,15 +390,16 @@ fn trace_symbol_usage<'a: 'b, 'b>(
 
     // Process relocations that reference other symbols
     for reloc in &section.relocations {
-        if let Some(local_sym) = global_symbols.get_local_symbol(
-            section.id.object_idx,
-            SymbolIdx(reloc.symbol_table_index as usize),
-        ) {
+        if let Some(local_sym) = global_symbols
+            .get_local_symbol(symbol_object, SymbolIdx(reloc.symbol_table_index as usize))
+        {
+            println!("symbol {name} references local symbol {local_sym:?}");
+
             match local_sym {
                 LocalSymbol::External { entry, resolution } => {
                     let sym_name = entry
                         .name
-                        .as_str(string_tables.get(&section.id.object_idx).copied())
+                        .as_str(string_tables.get(&symbol_object).copied())
                         .context("could not resolve symbol name")?;
 
                     if resolution.is_none() {
@@ -379,9 +456,7 @@ fn find_entry_point<'a: 'b, 'b>(
                         // Find the section containing this symbol
                         for obj_file in object_files {
                             for section in &obj_file.sections {
-                                if section.id.section_idx
-                                    == SectionIdx(simple.entry.section_number as usize - 1)
-                                {
+                                if section.id == simple.section_id {
                                     trace_symbol_usage(
                                         section,
                                         simple.entry,
@@ -389,6 +464,7 @@ fn find_entry_point<'a: 'b, 'b>(
                                         &string_tables,
                                         &mut usage,
                                     )?;
+
                                     return Ok((section.id, usage));
                                 }
                             }

@@ -5,6 +5,9 @@ use num_derive::{FromPrimitive, ToPrimitive};
 bitflags! {
   #[derive(Debug, Clone, Copy, PartialEq, Eq)]
   pub struct SectionCharacteristics: u32 {
+      const _ = !0;
+
+
       const TYPE_NO_PAD = 0x0000_0008;
       const CNT_CODE = 0x0000_0020;
       const CNT_INITIALIZED_DATA = 0x0000_0040;

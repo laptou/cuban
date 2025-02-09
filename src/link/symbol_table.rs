@@ -34,7 +34,7 @@ pub enum LocalSymbol<'a> {
     },
     External {
         entry: &'a SymbolTableEntry,
-        resolution: Option<GlobalSymbolSimpleDefinition<'a>>,
+        resolution: Option<GlobalSymbolDefinition<'a>>,
     },
     Weak {
         name: &'a str,
@@ -42,7 +42,7 @@ pub enum LocalSymbol<'a> {
         alternate: &'a SymbolTableEntry,
 
         /// Set after symbol resolution is complete
-        resolution: Option<GlobalSymbolSimpleDefinition<'a>>,
+        resolution: Option<GlobalSymbolDefinition<'a>>,
         characteristics: WeakExternalCharacteristics,
     },
 }
@@ -249,7 +249,7 @@ impl<'a> GlobalSymbolTable<'a> {
                                     match comdat_info.selection_mode {
                                         ComdatSelection::NoDuplicates => {
                                             bail!(
-                                                "found conflicting global definitions for COMDAT symbol {name}"
+                                                "found conflicting global definitions for COMDAT symbol {name} (COMDAT no duplicates)"
                                             );
                                         }
                                         ComdatSelection::ExactMatch => {
@@ -425,70 +425,12 @@ impl<'a> GlobalSymbolTable<'a> {
         let mut undefined_symbols = HashSet::new();
         let mut successful_resolutions = 0;
 
-        // Resolve any global COMDAT symbols first
-        for symbol in self.global_symbols.values_mut() {
-            symbol.definition = Some(match symbol.definition.clone() {
-                Some(def @ GlobalSymbolDefinition::Simple(_)) => {
-                    // no action needed
-                    def
-                }
-                Some(GlobalSymbolDefinition::Comdat(mut comdat_def)) => {
-                    // we need to pick one of the available definitions of this
-                    // symbol
-                    GlobalSymbolDefinition::Simple(match comdat_def.definitions.len() {
-                        0 => unreachable!(),
-                        1 => {
-                            // only one definition, we're done unless this is an
-                            // associative definition
-                            match comdat_def.selection_mode {
-                                ComdatSelection::Associative => todo!(),
-                                _ => {
-                                    let (_, single_def) = comdat_def.definitions.pop().unwrap();
-                                    single_def
-                                }
-                            }
-                        }
-                        _ => {
-                            // multiple definitions, select one according to
-                            // rule
-                            match comdat_def.selection_mode {
-                                ComdatSelection::Associative => todo!(),
-                                // we don't even allow duplicates with the
-                                // NoDuplicates mode to get added to the symbol
-                                // table in the first place
-                                ComdatSelection::NoDuplicates => unreachable!(),
-                                // we validate whether these rules are satisfied
-                                // when the symbol is added to the table, so
-                                // just pick an arbitrary definition
-                                ComdatSelection::Any
-                                | ComdatSelection::ExactMatch
-                                | ComdatSelection::SameSize => {
-                                    let (_, last_def) = comdat_def.definitions.pop().unwrap();
-                                    last_def
-                                }
-                                ComdatSelection::Largest => {
-                                    let (_, largest_def) = comdat_def
-                                        .definitions
-                                        .into_iter()
-                                        .max_by_key(|(comdat_info, _)| comdat_info.section_len)
-                                        .unwrap();
-                                    largest_def
-                                }
-                            }
-                        }
-                    })
-                }
-                None => {
-                    continue;
-                }
-            })
-        }
-
         // Clone the local_symbols keys since we need to modify the map while iterating
         let object_indices: Vec<_> = self.local_symbols.keys().cloned().collect();
 
         for object_idx in object_indices {
             let local_table = self.local_symbols.get_mut(&object_idx).unwrap();
+            let string_table = string_tables.get(&object_idx).copied();
 
             // Need to process each symbol in the local table
             for symbol in &mut local_table.symbols {
@@ -498,15 +440,18 @@ impl<'a> GlobalSymbolTable<'a> {
                             // Get symbol name
                             let name = entry
                                 .name
-                                .as_str(string_tables.get(&object_idx).copied())
-                                .context("could not resolve external symbol name")?;
+                                .as_str(string_table)
+                                .with_context(|| {
+                                format!(
+                                    "could not resolve external symbol name for symbol {:?} (has_string_table = {})",
+                                    entry.name,
+                                    string_table.is_some(),
+                                )
+                            })?;
 
                             // Look up in global symbols table
                             if let Some(global_sym) = self.global_symbols.get(name) {
                                 let global_def = global_sym.definition.clone().unwrap();
-                                let GlobalSymbolDefinition::Simple(global_def) = global_def else {
-                                    unreachable!()
-                                };
 
                                 resolution.replace(global_def);
                                 successful_resolutions += 1;
@@ -525,16 +470,25 @@ impl<'a> GlobalSymbolTable<'a> {
                             // Look up in global symbols table
                             if let Some(global_sym) = self.global_symbols.get(name) {
                                 if let Some(global_def) = &global_sym.definition {
-                                    let GlobalSymbolDefinition::Simple(global_def) = global_def
-                                    else {
-                                        unreachable!()
-                                    };
-
                                     match characteristics {
                                         WeakExternalCharacteristics::NoLibrarySearch => {
-                                            // Only resolve if symbol is from the same object file
-                                            if global_def.section_id.object_idx == object_idx {
-                                                *resolution = Some(global_def.clone());
+                                            match global_def {
+                                                GlobalSymbolDefinition::Simple(simple) => {
+                                                    // Only resolve if symbol is from the same object file
+                                                    if simple.section_id.object_idx == object_idx {
+                                                        *resolution = Some(global_def.clone());
+                                                    }
+                                                }
+                                                GlobalSymbolDefinition::Comdat(comdat) => {
+                                                    for (_, comdat_def) in &comdat.definitions {
+                                                        // Only resolve if symbol is from the same object file
+                                                        if comdat_def.section_id.object_idx
+                                                            == object_idx
+                                                        {
+                                                            *resolution = Some(global_def.clone());
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                         WeakExternalCharacteristics::LibrarySearch => {
@@ -563,6 +517,67 @@ impl<'a> GlobalSymbolTable<'a> {
                 successful_resolutions,
                 undefined_symbols,
             })
+        }
+    }
+
+    pub fn select_comdat_symbols(&mut self) {
+        // Resolve any global COMDAT symbols first
+        for symbol in self.global_symbols.values_mut() {
+            match &mut symbol.definition {
+                Some(GlobalSymbolDefinition::Simple(_)) => {
+                    // no action needed
+                }
+                Some(GlobalSymbolDefinition::Comdat(comdat_def)) => {
+                    // we need to pick one of the available definitions of this
+                    // symbol
+                    match comdat_def.definitions.len() {
+                        0 => unreachable!(),
+                        1 => {
+                            // only one definition, we're done unless this is an
+                            // associative definition
+                            match comdat_def.selection_mode {
+                                ComdatSelection::Associative => todo!(),
+                                _ => {
+                                    let (_, single_def) = comdat_def.definitions.pop().unwrap();
+                                    comdat_def.selection = Some(single_def.section_id);
+                                }
+                            }
+                        }
+                        _ => {
+                            // multiple definitions, select one according to
+                            // rule
+                            match comdat_def.selection_mode {
+                                ComdatSelection::Associative => todo!(),
+                                // we don't even allow duplicates with the
+                                // NoDuplicates mode to get added to the symbol
+                                // table in the first place
+                                ComdatSelection::NoDuplicates => unreachable!(),
+                                // we validate whether these rules are satisfied
+                                // when the symbol is added to the table, so
+                                // just pick an arbitrary definition
+                                ComdatSelection::Any
+                                | ComdatSelection::ExactMatch
+                                | ComdatSelection::SameSize => {
+                                    let (_, last_def) = comdat_def.definitions.pop().unwrap();
+                                    comdat_def.selection = Some(last_def.section_id);
+                                }
+                                ComdatSelection::Largest => {
+                                    let (_, largest_def) = comdat_def
+                                        .definitions
+                                        .iter()
+                                        .max_by_key(|(comdat_info, _)| comdat_info.section_len)
+                                        .unwrap();
+
+                                    comdat_def.selection = Some(largest_def.section_id);
+                                }
+                            }
+                        }
+                    }
+                }
+                None => {
+                    continue;
+                }
+            }
         }
     }
 }

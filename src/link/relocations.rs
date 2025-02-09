@@ -8,7 +8,9 @@ use crate::coff::{
     CoffSection, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
 };
 
-use super::symbol_table::{GlobalSymbolTable, LocalSymbol};
+use super::symbol_table::{
+    GlobalSymbolDefinition, GlobalSymbolSimpleDefinition, GlobalSymbolTable, LocalSymbol,
+};
 
 pub fn apply_relocations<'a>(
     sections: &mut [CoffSection<'a>],
@@ -160,6 +162,8 @@ fn resolve_local_symbol<'a: 'b, 'b>(
                     .as_ref()
                     .context("external symbol is not resolved")?;
 
+                let gs = collapse_global_symbol(gs);
+
                 let section = section_map
                     .get(&gs.section_id)
                     .context("could not resolve target section")?;
@@ -175,6 +179,8 @@ fn resolve_local_symbol<'a: 'b, 'b>(
             // for weak symbols, use the resolution if we have one,
             // otherwise fall back to the local alternate
             if let Some(resolution) = resolution.as_ref() {
+                let resolution = collapse_global_symbol(resolution);
+
                 let section = section_map
                     .get(&resolution.section_id)
                     .context("could not resolve target section")?;
@@ -216,6 +222,29 @@ fn resolve_local_symbol<'a: 'b, 'b>(
                 .context("could not resolve target section")?;
 
             return Ok((*entry, section));
+        }
+    }
+}
+
+/// Gets a specific global symbol definition from one that may or may not be a
+/// COMDAT symbol. Expects that COMDAT symbol selection has already been done.
+fn collapse_global_symbol<'a, 'b>(
+    gs: &'b GlobalSymbolDefinition<'a>,
+) -> &'b GlobalSymbolSimpleDefinition<'a> {
+    match gs {
+        GlobalSymbolDefinition::Simple(simple) => simple,
+        GlobalSymbolDefinition::Comdat(comdat) => {
+            let selection = comdat
+                .selection
+                .expect("COMDAT symbols should be resolved by the time this is called");
+
+            let (_, def) = comdat
+                .definitions
+                .iter()
+                .find(|(_, def)| def.section_id == selection)
+                .unwrap();
+
+            def
         }
     }
 }

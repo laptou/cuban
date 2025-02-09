@@ -10,7 +10,11 @@ use winnow::{
     token::{take, take_until},
 };
 
+mod import_library;
+
 use crate::parse::Parse;
+
+use super::CoffFile;
 
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
 const LINKER_MEMBER: &[u8] = b"/               ";
@@ -31,6 +35,12 @@ pub struct ArchiveMember<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub enum ArchiveMemberContent<'a> {
+    CoffFile(CoffFile<'a>),
+    ShortImportLibrary(ShortImportLibrary<'a>)
+}
+
+#[derive(Debug, Clone)]
 pub struct ArchiveMemberHeader<'a> {
     pub name: ArchiveMemberName<'a>,
     pub date: i64,
@@ -46,7 +56,7 @@ pub enum ArchiveMemberName<'a> {
     Name(Cow<'a, str>),
     /// Name stored in longnames member at given offset
     LongName(u32),
-    /// First linker member
+    /// Linker member
     Linker,
     /// Longnames member
     Longnames,
@@ -85,6 +95,7 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
         let mut longnames = None;
 
         while !input.is_empty() {
+            let offset = all_data.len() - input.len();
             let mut member: ArchiveMember<'a> = ArchiveMember::parse
                 .context(StrContext::Label("archive member"))
                 .parse_next(input)?;
@@ -97,20 +108,30 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
                                 .context(StrContext::Label("first linker member"))
                                 .parse_next(&mut member.data)?,
                         );
+                        println!("found first linker {first_linker:?}");
                     } else {
                         second_linker = Some(
                             SecondLinkerMember::parse
-                                .context(StrContext::Label("first linker member"))
+                                .context(StrContext::Label("second linker member"))
                                 .parse_next(&mut member.data)?,
                         );
+                        println!("found second linker {second_linker:?}");
                     }
                 }
                 ArchiveMemberName::Longnames => {
                     longnames = Some(LongnamesMember {
                         strings: member.data,
                     });
+                    println!("found longnames {:?}", member.header);
                 }
-                _ => members.push(member),
+                _ => {
+                    println!(
+                        "found member {} at offset {offset:x} size {:x}: {:?}",
+                        members.len(), member.header.size, member.header
+                    );
+
+                    members.push(member)
+                }
             }
 
             // Archive members are 2-byte aligned
@@ -189,7 +210,7 @@ impl<'a> Parse<'a> for ArchiveMemberHeader<'a> {
         let mode = take(8usize)
             .try_map(std::str::from_utf8)
             .map(str::trim)
-            .try_map(u32::from_str)
+            .try_map(|s| u32::from_str_radix(s, 8))
             .context(StrContext::Label("mode"))
             .parse_next(input)?;
 
@@ -201,7 +222,7 @@ impl<'a> Parse<'a> for ArchiveMemberHeader<'a> {
             .parse_next(input)?;
 
         // Check ending characters
-        let end = b"`\n"
+        b"`\n"
             .context(StrContext::Label("header end"))
             .parse_next(input)?;
 

@@ -16,6 +16,8 @@ use winnow::combinator::repeat;
 use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
+use winnow::token::take_till;
+use winnow::token::take_until;
 use winnow::token::take_while;
 
 use crate::flags::FileCharacteristics;
@@ -155,11 +157,12 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
 
     fn parse(data: &mut &'a [u8]) -> Result<Self, Self::Error> {
         let mut name = take(8usize)
-            .context(StrContext::Label("name"))
+            .context(StrContext::Label("section header name"))
             .parse_next(data)?;
-        let name = take_while(0..8, |c| c != 0)
-            .verify_map(|s| std::str::from_utf8(s).ok())
-            .context(StrContext::Label("name utf-8"))
+
+        let name = take_till(0..8, b'\0')
+            .try_map(std::str::from_utf8)
+            .context(StrContext::Label("section header name utf-8"))
             .parse_next(&mut name)?;
 
         let (
@@ -181,7 +184,9 @@ impl<'a> Parse<'a> for CoffSectionHeader<'a> {
             le_u32,
             le_u16,
             le_u16,
-            le_u32.verify_map(SectionCharacteristics::from_bits),
+            le_u32
+                .verify_map(SectionCharacteristics::from_bits)
+                .context(StrContext::Label("section characteristics")),
         )
             .parse_next(data)?;
 
@@ -218,6 +223,9 @@ pub struct CoffSection<'a> {
 
 #[derive(Debug, Clone)]
 pub struct CoffFile<'a> {
+    /// Not parsed from file, but assigned by `cuban` for tracking
+    pub idx: ObjectIdx,
+
     pub header: CoffFileHeader,
     pub sections: Vec<CoffSection<'a>>,
     pub symbol_table: Option<SymbolTable>,
@@ -234,11 +242,13 @@ impl<'a> Parse<'a> for CoffFile<'a> {
             .context(StrContext::Label("coff header"))
             .parse_next(data)?;
 
+        dbg!(&file_header);
+
         let section_headers: Vec<_> = repeat(
             file_header.number_of_sections as usize,
             CoffSectionHeader::parse,
         )
-        .context(StrContext::Label("sections"))
+        .context(StrContext::Label("section headers"))
         .parse_next(data)?;
 
         let mut sections: Vec<_> = section_headers
@@ -318,6 +328,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
         };
 
         Ok(Self {
+            idx: ObjectIdx(0),
             header: file_header,
             sections,
             symbol_table,
