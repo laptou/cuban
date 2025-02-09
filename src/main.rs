@@ -37,7 +37,8 @@ fn main() -> anyhow::Result<()> {
         .try_collect()?;
 
     let mut input_object_files: Vec<Object<'_>> = vec![];
-    let mut library_object_files: Vec<Object<'_>> = vec![];
+    let mut library_files: Vec<(CoffArchive<'_>, Vec<Object<'_>>)> = vec![];
+    let mut symbol_to_library_map: HashMap<&str, (usize, usize)> = HashMap::new();
 
     for (file_path, file_data) in &file_data {
         match file_path
@@ -50,7 +51,32 @@ fn main() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!(e))
                     .with_context(|| format!("error parsing archive {file_path:?}"))?;
 
-                for (idx, member) in archive.members.into_iter().enumerate() {
+                // Build symbol map from linker members
+                if let Some(linker) = &archive.second_linker {
+                    for (idx, name) in &linker.symbols {
+                        symbol_to_library_map.insert(
+                            name.as_ref(),
+                            (library_files.len(), *idx as usize),
+                        );
+                    }
+                } else if let Some(linker) = &archive.first_linker {
+                    for (offset, name) in &linker.symbols {
+                        // Find member index by offset
+                        if let Some(member_idx) = archive.members.iter().position(|m| {
+                            let member_offset = (m.data.as_ptr() as usize) - (file_data.as_ptr() as usize);
+                            member_offset == *offset as usize
+                        }) {
+                            symbol_to_library_map.insert(
+                                name.as_ref(),
+                                (library_files.len(), member_idx),
+                            );
+                        }
+                    }
+                }
+
+                // Parse object files but don't process them yet
+                let mut objects = Vec::new();
+                for (idx, member) in archive.members.iter().enumerate() {
                     let member_content = ArchiveMemberContent::parse(&mut &member.data[..])
                         .map_err(|e| anyhow::anyhow!(e))
                         .with_context(|| {
@@ -59,11 +85,13 @@ fn main() -> anyhow::Result<()> {
 
                     match member_content {
                         ArchiveMemberContent::Object(object) => {
-                            library_object_files.push(object);
+                            objects.push(object);
                         }
-                        ArchiveMemberContent::ShortImportLibrary(import_lib) => {}
+                        ArchiveMemberContent::ShortImportLibrary(_) => {}
                     }
                 }
+                
+                library_files.push((archive, objects));
             }
             Some("obj") => {
                 let obj = Object::parse(&mut file_data.as_slice())
@@ -88,14 +116,15 @@ fn main() -> anyhow::Result<()> {
         object_file_idx += 1;
     }
 
-    for object_file in library_object_files.iter_mut() {
-        object_file.idx = ObjectIdx(object_file_idx);
-
-        for section in &mut object_file.sections {
-            section.id.object_idx = ObjectIdx(object_file_idx);
+    // Assign object indices to library files but don't process them yet
+    for (_, objects) in &mut library_files {
+        for object_file in objects.iter_mut() {
+            object_file.idx = ObjectIdx(object_file_idx);
+            for section in &mut object_file.sections {
+                section.id.object_idx = ObjectIdx(object_file_idx);
+            }
+            object_file_idx += 1;
         }
-
-        object_file_idx += 1;
     }
 
     let mut used_library_object_idxs = HashSet::new();
@@ -134,64 +163,65 @@ fn main() -> anyhow::Result<()> {
                     bail!("unresolved symbols: {:?}", undefined_symbols);
                 }
 
-                // Search libraries
-                for lib_obj in &library_object_files {
-                    if let Some(symbol_table) = &lib_obj.symbol_table {
-                        // we've already included this object
+                // Search libraries using symbol map
+                for undefined_symbol in &undefined_symbols {
+                    if let Some(&(lib_idx, obj_idx)) = symbol_to_library_map.get(undefined_symbol) {
+                        let (_, lib_objects) = &library_files[lib_idx];
+                        let lib_obj = &lib_objects[obj_idx];
+
+                        // Skip if we've already included this object
                         if used_library_object_idxs.contains(&lib_obj.idx) {
                             continue;
                         }
 
-                        let section_map = lib_obj.sections.iter().map(|s| (s.id, s)).collect();
-                        let lib_str_table = lib_obj.string_table.as_ref();
+                        if let Some(symbol_table) = &lib_obj.symbol_table {
+                            let section_map = lib_obj.sections.iter().map(|s| (s.id, s)).collect();
+                            let lib_str_table = lib_obj.string_table.as_ref();
 
-                        // Only process symbols we need
-                        for entry in &symbol_table.entries {
-                            let section_idx = if entry.section_number > 0 {
-                                SectionIdx(entry.section_number as usize - 1)
-                            } else {
-                                // symbol is declared here, but not defined here
-                                continue;
-                            };
+                            // Add all symbols from this object
+                            global_symbols.add_all(
+                                symbol_table,
+                                lib_str_table,
+                                &section_map,
+                                lib_obj.idx,
+                            )?;
 
-                            let section_id = SectionId {
-                                section_idx,
-                                object_idx: lib_obj.idx,
-                            };
+                            if let Some(lib_str_table) = lib_str_table {
+                                string_tables.insert(lib_obj.idx, lib_str_table);
+                            }
 
-                            if let Some(name) = entry.name.as_str(lib_str_table) {
-                                if undefined_symbols.contains(name) {
-                                    println!(
-                                        "found undefined symbol {name} in library object file {:?}",
-                                        lib_obj.idx
-                                    );
+                            // Find the specific symbol we needed
+                            for entry in &symbol_table.entries {
+                                if let Some(name) = entry.name.as_str(lib_str_table) {
+                                    if name == *undefined_symbol {
+                                        if entry.section_number > 0 {
+                                            let section_idx = SectionIdx(entry.section_number as usize - 1);
+                                            let section_id = SectionId {
+                                                section_idx,
+                                                object_idx: lib_obj.idx,
+                                            };
 
-                                    global_symbols.add_all(
-                                        symbol_table,
-                                        lib_obj.string_table.as_ref(),
-                                        &section_map,
-                                        lib_obj.idx,
-                                    )?;
+                                            println!(
+                                                "found undefined symbol {name} in library object file {:?}",
+                                                lib_obj.idx
+                                            );
 
-                                    if let Some(lib_str_table) = lib_str_table {
-                                        string_tables.insert(lib_obj.idx, lib_str_table);
+                                            let section = *section_map
+                                                .get(&section_id)
+                                                .context("could not get section for symbol")?;
+
+                                            trace_symbol_usage(
+                                                section,
+                                                entry,
+                                                &global_symbols,
+                                                &string_tables,
+                                                &mut symbol_usage,
+                                            )?;
+
+                                            used_library_object_idxs.insert(lib_obj.idx);
+                                            break;
+                                        }
                                     }
-
-                                    let section = *section_map
-                                        .get(&section_id)
-                                        .context("could not get section for symbol")?;
-
-                                    trace_symbol_usage(
-                                        section,
-                                        entry,
-                                        &global_symbols,
-                                        &string_tables,
-                                        &mut symbol_usage,
-                                    )?;
-
-                                    used_library_object_idxs.insert(lib_obj.idx);
-
-                                    break;
                                 }
                             }
                         }
@@ -204,12 +234,15 @@ fn main() -> anyhow::Result<()> {
     global_symbols.select_comdat_symbols();
 
     let mut used_object_files = input_object_files.clone();
-    used_object_files.extend(
-        library_object_files
-            .iter()
-            .filter(|o| used_library_object_idxs.contains(&o.idx))
-            .cloned(),
-    );
+    // Add used library objects
+    for (_, lib_objects) in &library_files {
+        used_object_files.extend(
+            lib_objects
+                .iter()
+                .filter(|o| used_library_object_idxs.contains(&o.idx))
+                .cloned(),
+        );
+    }
 
     let mut sections = used_object_files
         .iter()
