@@ -1,9 +1,11 @@
+use num_traits::FromPrimitive;
 use std::borrow::Cow;
 use winnow::{
     binary::{le_u16, le_u32, le_u8},
     combinator::preceded,
     error::ContextError,
     token::take_until,
+    Parser,
 };
 
 use crate::parse::Parse;
@@ -33,6 +35,30 @@ pub struct TypeInfo {
     pub name_type: NameType,
 }
 
+impl FromPrimitive for TypeInfo {
+    fn from_i64(n: i64) -> Option<Self> {
+        Self::from_u64(n as u64)
+    }
+
+    fn from_u64(n: u64) -> Option<Self> {
+        Some(TypeInfo {
+            import_type: match n & 0x3 {
+                0 => ImportType::Code,
+                1 => ImportType::Data,
+                2 => ImportType::Const,
+                _ => return None,
+            },
+            name_type: match (n >> 2) & 0x3 {
+                0 => NameType::Ordinal,
+                1 => NameType::Name,
+                2 => NameType::NoPrefix,
+                3 => NameType::Undecorate,
+                _ => return None,
+            },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum ImportType {
@@ -60,7 +86,7 @@ impl<'a> Parse<'a> for ShortImportLibrary<'a> {
         let import_name = take_until(0.., 0)
             .try_map(std::str::from_utf8)
             .parse_next(input)?;
-        
+
         // Skip null terminator
         le_u8.parse_next(input)?;
 
@@ -87,24 +113,9 @@ impl Parse<'_> for ImportHeader {
         let time_date_stamp = le_u32.parse_next(input)?;
         let size_of_data = le_u32.parse_next(input)?;
         let ordinal_hint = le_u16.parse_next(input)?;
-        
+
         // Parse type info bits
-        let type_bits = le_u16.parse_next(input)?;
-        let type_info = TypeInfo {
-            import_type: match type_bits & 0x3 {
-                0 => ImportType::Code,
-                1 => ImportType::Data,
-                2 => ImportType::Const,
-                _ => return Err(ContextError::from_context("invalid import type", input)),
-            },
-            name_type: match (type_bits >> 2) & 0x3 {
-                0 => NameType::Ordinal,
-                1 => NameType::Name,
-                2 => NameType::NoPrefix,
-                3 => NameType::Undecorate,
-                _ => return Err(ContextError::from_context("invalid name type", input)),
-            },
-        };
+        let type_info = le_u16.verify_map(TypeInfo::from_u16).parse_next(input)?;
 
         Ok(ImportHeader {
             sig1,

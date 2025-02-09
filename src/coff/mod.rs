@@ -212,7 +212,7 @@ pub struct SectionId {
 }
 
 #[derive(Debug, Clone)]
-pub struct CoffSection<'a> {
+pub struct Section<'a> {
     /// Not parsed from file, but assigned by `cuban` for tracking
     pub id: SectionId,
 
@@ -222,17 +222,17 @@ pub struct CoffSection<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct CoffFile<'a> {
+pub struct Object<'a> {
     /// Not parsed from file, but assigned by `cuban` for tracking
     pub idx: ObjectIdx,
 
     pub header: CoffFileHeader,
-    pub sections: Vec<CoffSection<'a>>,
+    pub sections: Vec<Section<'a>>,
     pub symbol_table: Option<SymbolTable>,
     pub string_table: Option<StringTable<'a>>,
 }
 
-impl<'a> Parse<'a> for CoffFile<'a> {
+impl<'a> Parse<'a> for Object<'a> {
     type Error = ContextError;
 
     fn parse(data: &mut &'a [u8]) -> Result<Self, Self::Error> {
@@ -254,7 +254,7 @@ impl<'a> Parse<'a> for CoffFile<'a> {
         let mut sections: Vec<_> = section_headers
             .into_iter()
             .enumerate()
-            .map(|(idx, header)| CoffSection {
+            .map(|(idx, header)| Section {
                 id: SectionId {
                     object_idx: ObjectIdx(0),
                     section_idx: SectionIdx(idx),

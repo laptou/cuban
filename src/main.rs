@@ -4,10 +4,10 @@ use std::{borrow::Cow, path::PathBuf, str::FromStr};
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use coff::archive::CoffArchive;
+use coff::archive::{ArchiveMemberContent, CoffArchive};
 use coff::relocations::{I386RelocationType, RelocationType};
 use coff::symbol_table::{StorageClass, SymbolTableEntry};
-use coff::{CoffFile, CoffSection, ObjectIdx, SectionId, SectionIdx, SymbolIdx};
+use coff::{Object, ObjectIdx, Section, SectionId, SectionIdx, SymbolIdx};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
 use link::relocations::apply_relocations;
@@ -36,8 +36,8 @@ fn main() -> anyhow::Result<()> {
         .map(|file_path| std::fs::read(&file_path).map(|data| (file_path, data)))
         .try_collect()?;
 
-    let mut input_object_files: Vec<CoffFile<'_>> = vec![];
-    let mut library_object_files: Vec<CoffFile<'_>> = vec![];
+    let mut input_object_files: Vec<Object<'_>> = vec![];
+    let mut library_object_files: Vec<Object<'_>> = vec![];
 
     for (file_path, file_data) in &file_data {
         match file_path
@@ -51,26 +51,27 @@ fn main() -> anyhow::Result<()> {
                     .with_context(|| format!("error parsing archive {file_path:?}"))?;
 
                 for (idx, member) in archive.members.into_iter().enumerate() {
-                    dbg!(idx, &member.header);
-
-                    let library_object = CoffFile::parse(&mut &member.data[..])
+                    let member_content = ArchiveMemberContent::parse(&mut &member.data[..])
                         .map_err(|e| anyhow::anyhow!(e))
                         .with_context(|| {
-                            format!("error parsing archive member of {file_path:?}")
+                            format!("error parsing archive member {idx} of {file_path:?}")
                         })?;
 
-                    library_object_files.push(library_object);
+                    match member_content {
+                        ArchiveMemberContent::Object(object) => {
+                            library_object_files.push(object);
+                        }
+                        ArchiveMemberContent::ShortImportLibrary(import_lib) => {}
+                    }
                 }
-
-                return Ok(());
             }
-            // Some("obj") => {
-            //     let obj = CoffFile::parse(&mut file_data.as_slice())
-            //         .map_err(|e| anyhow::anyhow!(e))
-            //         .with_context(|| format!("error parsing object {file_path:?}"))?;
+            Some("obj") => {
+                let obj = Object::parse(&mut file_data.as_slice())
+                    .map_err(|e| anyhow::anyhow!(e))
+                    .with_context(|| format!("error parsing object {file_path:?}"))?;
 
-            //     input_object_files.push(obj)
-            // }
+                input_object_files.push(obj)
+            }
             other => bail!("unknown extension {other:?}"),
         }
     }
@@ -314,7 +315,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Counts the total amount of (code, initialized data, uninitialized data)
-fn count_section_totals(merged_sections: &[coff::CoffSection<'_>]) -> (u32, u32, u32) {
+fn count_section_totals(merged_sections: &[coff::Section<'_>]) -> (u32, u32, u32) {
     let mut code_size = 0;
     let mut init_data_size = 0;
     let mut uninit_data_size = 0;
@@ -340,7 +341,7 @@ fn count_section_totals(merged_sections: &[coff::CoffSection<'_>]) -> (u32, u32,
 }
 
 fn collect_global_symbols<'a, 'b: 'a>(
-    object_files: &'b [CoffFile<'a>],
+    object_files: &'b [Object<'a>],
 ) -> anyhow::Result<GlobalSymbolTable<'a>> {
     let mut global_symbols = GlobalSymbolTable::new();
 
@@ -369,7 +370,7 @@ struct SymbolUsage<'a> {
 }
 
 fn trace_symbol_usage<'a: 'b, 'b>(
-    section: &CoffSection<'a>,
+    section: &Section<'a>,
     symbol: &'a SymbolTableEntry,
     global_symbols: &'b GlobalSymbolTable<'a>,
     string_tables: &'b HashMap<ObjectIdx, &'b coff::string_table::StringTable<'a>>,
@@ -434,7 +435,7 @@ fn trace_symbol_usage<'a: 'b, 'b>(
 }
 
 fn find_entry_point<'a: 'b, 'b>(
-    object_files: &'b [CoffFile<'a>],
+    object_files: &'b [Object<'a>],
     global_symbols: &'b GlobalSymbolTable<'a>,
 ) -> anyhow::Result<(SectionId, SymbolUsage<'a>)> {
     // Build string tables map
@@ -480,16 +481,16 @@ fn find_entry_point<'a: 'b, 'b>(
 }
 
 fn order_and_merge_sections(
-    mut sections: Vec<coff::CoffSection<'_>>,
-) -> anyhow::Result<Vec<coff::CoffSection<'_>>> {
+    mut sections: Vec<coff::Section<'_>>,
+) -> anyhow::Result<Vec<coff::Section<'_>>> {
     sections.sort_by(|s1, s2| {
         // sort sections by name
         return s1.header.name.cmp(&s2.header.name);
     });
 
     // merge sections with same name
-    let mut merged_sections: Vec<coff::CoffSection<'_>> = vec![];
-    let mut prev: Option<coff::CoffSection<'_>> = None;
+    let mut merged_sections: Vec<coff::Section<'_>> = vec![];
+    let mut prev: Option<coff::Section<'_>> = None;
 
     for next in sections {
         if let Some(prev) = &mut prev {

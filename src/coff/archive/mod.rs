@@ -15,7 +15,7 @@ use import_library::ShortImportLibrary;
 
 use crate::parse::Parse;
 
-use super::CoffFile;
+use super::Object;
 
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
 const LINKER_MEMBER: &[u8] = b"/               ";
@@ -37,8 +37,8 @@ pub struct ArchiveMember<'a> {
 
 #[derive(Debug, Clone)]
 pub enum ArchiveMemberContent<'a> {
-    CoffFile(CoffFile<'a>),
-    ShortImportLibrary(ShortImportLibrary<'a>)
+    Object(Object<'a>),
+    ShortImportLibrary(ShortImportLibrary<'a>),
 }
 
 impl<'a> ArchiveMemberContent<'a> {
@@ -48,7 +48,7 @@ impl<'a> ArchiveMemberContent<'a> {
             Ok(ArchiveMemberContent::ShortImportLibrary(import))
         } else {
             // Otherwise try as COFF file
-            Ok(ArchiveMemberContent::CoffFile(CoffFile::parse(data)?))
+            Ok(ArchiveMemberContent::Object(Object::parse(data)?))
         }
     }
 }
@@ -140,7 +140,9 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
                 _ => {
                     println!(
                         "found member {} at offset {offset:x} size {:x}: {:?}",
-                        members.len(), member.header.size, member.header
+                        members.len(),
+                        member.header.size,
+                        member.header
                     );
 
                     members.push(member)
@@ -301,5 +303,17 @@ impl<'a> Parse<'a> for SecondLinkerMember<'a> {
             member_offsets,
             symbols,
         })
+    }
+}
+
+impl<'a> Parse<'a> for ArchiveMemberContent<'a> {
+    type Error = ContextError;
+
+    fn parse(data: &mut &'a [u8]) -> Result<Self, Self::Error> {
+        alt((
+            Object::parse.map(ArchiveMemberContent::Object),
+            ShortImportLibrary::parse.map(ArchiveMemberContent::ShortImportLibrary),
+        ))
+        .parse_next(data)
     }
 }

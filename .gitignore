@@ -5,3 +5,4 @@
 .aider*
 *.dump
 *.log
+*.lib

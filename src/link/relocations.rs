@@ -5,7 +5,7 @@ use anyhow::{bail, Context};
 use crate::coff::{
     relocations::{I386RelocationType, RelocationType},
     symbol_table::SymbolTableEntry,
-    CoffSection, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
+    Section, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
 };
 
 use super::symbol_table::{
@@ -13,7 +13,7 @@ use super::symbol_table::{
 };
 
 pub fn apply_relocations<'a>(
-    sections: &mut [CoffSection<'a>],
+    sections: &mut [Section<'a>],
     global_symbols: &GlobalSymbolTable<'a>,
     image_base: u64,
     section_alignment: u32,
@@ -65,11 +65,11 @@ pub fn apply_relocations<'a>(
 }
 
 fn apply_section_relocations<'a>(
-    section: &mut CoffSection<'a>,
+    section: &mut Section<'a>,
     global_symbols: &GlobalSymbolTable<'a>,
     image_base: u64,
     section_rva: u64,
-    section_map: &HashMap<SectionId, &CoffSection<'a>>,
+    section_map: &HashMap<SectionId, &Section<'a>>,
 ) -> anyhow::Result<()> {
     // Skip if no relocations
     if section.relocations.is_empty() {
@@ -138,9 +138,9 @@ fn apply_section_relocations<'a>(
 
 fn resolve_local_symbol<'a: 'b, 'b>(
     local_symbol: &LocalSymbol<'a>,
-    section_map: &'b HashMap<SectionId, &CoffSection<'a>>,
+    section_map: &'b HashMap<SectionId, &Section<'a>>,
     object_idx: ObjectIdx,
-) -> anyhow::Result<(&'a SymbolTableEntry, &'b CoffSection<'a>)> {
+) -> anyhow::Result<(&'a SymbolTableEntry, &'b Section<'a>)> {
     match local_symbol {
         LocalSymbol::External { entry, resolution } => {
             // is this external symbol defined in this object?

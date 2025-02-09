@@ -10,7 +10,7 @@ use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 
-use crate::coff::CoffSection;
+use crate::coff::Section;
 use crate::coff::SectionId;
 use crate::coff::ObjectIdx;
 use crate::coff::SectionIdx;
@@ -343,7 +343,7 @@ pub struct PeFile<'a> {
     pub dos_header: DosHeader,
     pub coff_header: CoffFileHeader,
     pub optional_header: OptionalHeader,
-    pub sections: Vec<CoffSection<'a>>,
+    pub sections: Vec<Section<'a>>,
     pub symbol_table: Option<SymbolTable>,
     pub string_table: Option<StringTable<'a>>,
 }
@@ -600,7 +600,7 @@ impl<'a> Parse<'a> for PeFile<'a> {
         let mut sections: Vec<_> = section_headers
             .into_iter()
             .enumerate()
-            .map(|(idx, header)| CoffSection {
+            .map(|(idx, header)| Section {
                 id: SectionId {
                     object_idx: ObjectIdx(0),
                     section_idx: SectionIdx(idx),

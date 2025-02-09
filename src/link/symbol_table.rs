@@ -13,7 +13,7 @@ use crate::{
             AuxSymbolRecord, AuxSymbolRecordSection, AuxSymbolRecordWeakExternal, ComdatSelection,
             Name, StorageClass, SymbolTable, SymbolTableEntry, WeakExternalCharacteristics,
         },
-        CoffSection, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
+        Section, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
     },
     flags::SectionCharacteristics,
 };
@@ -119,7 +119,7 @@ pub struct ComdatInfo {
 
 fn get_comdat_info(
     entry: &SymbolTableEntry,
-    section_map: &HashMap<SectionId, &CoffSection<'_>>,
+    section_map: &HashMap<SectionId, &Section<'_>>,
     object_idx: ObjectIdx,
 ) -> anyhow::Result<Option<ComdatInfo>> {
     // is this a section symbol? if so, we need to check for COMDAT sections
@@ -181,7 +181,7 @@ impl<'a> GlobalSymbolTable<'a> {
         &mut self,
         symbol_table: &'a SymbolTable,
         string_table: Option<&'a StringTable<'a>>,
-        section_map: &HashMap<SectionId, &CoffSection<'a>>,
+        section_map: &HashMap<SectionId, &Section<'a>>,
         object_idx: ObjectIdx,
     ) -> anyhow::Result<()> {
         // Process each symbol in the table
