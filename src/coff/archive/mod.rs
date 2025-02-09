@@ -11,6 +11,7 @@ use winnow::{
 };
 
 mod import_library;
+use import_library::ShortImportLibrary;
 
 use crate::parse::Parse;
 
@@ -38,6 +39,18 @@ pub struct ArchiveMember<'a> {
 pub enum ArchiveMemberContent<'a> {
     CoffFile(CoffFile<'a>),
     ShortImportLibrary(ShortImportLibrary<'a>)
+}
+
+impl<'a> ArchiveMemberContent<'a> {
+    pub fn parse(data: &mut &'a [u8]) -> Result<Self, ContextError> {
+        // Try parsing as short import library first
+        if let Ok(import) = ShortImportLibrary::parse(data) {
+            Ok(ArchiveMemberContent::ShortImportLibrary(import))
+        } else {
+            // Otherwise try as COFF file
+            Ok(ArchiveMemberContent::CoffFile(CoffFile::parse(data)?))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
