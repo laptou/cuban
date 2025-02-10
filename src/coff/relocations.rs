@@ -9,29 +9,26 @@ use winnow::{
 use crate::parse::Parse;
 
 #[derive(Debug, Clone)]
-pub struct CoffRelocation {
+pub struct Relocation {
     pub virtual_address: u32,
     pub symbol_table_index: u32,
     pub relocation_type: RelocationType,
 }
 
-impl<'a> Parse<'a> for CoffRelocation {
+impl<'a> Parse<'a> for Relocation {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
         let virtual_address = le_u32.parse_next(input)?;
         let symbol_table_index = le_u32.parse_next(input)?;
-        let type_raw = le_u16.parse_next(input)?;
+        let reloc_ty = le_u16
+            .verify_map(I386RelocationType::from_u16)
+            .parse_next(input)?;
 
-        // Get machine type from context to determine relocation type enum
-        // For now just parse as x64 relocations
-        let relocation_type =
-            I386RelocationType::from_u16(type_raw).unwrap_or(I386RelocationType::Absolute);
-
-        Ok(CoffRelocation {
+        Ok(Relocation {
             virtual_address,
             symbol_table_index,
-            relocation_type: RelocationType::I386(relocation_type),
+            relocation_type: RelocationType::I386(reloc_ty),
         })
     }
 }

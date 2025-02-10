@@ -44,7 +44,7 @@ pub struct SectionIdx(pub usize);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
 pub struct SymbolIdx(pub usize);
 
-use relocations::CoffRelocation;
+use relocations::Relocation;
 
 #[derive(Error, Debug)]
 pub enum CoffError<'a> {
@@ -223,7 +223,7 @@ pub struct Section<'a> {
 
     pub header: CoffSectionHeader<'a>,
     pub data: Option<Cow<'a, [u8]>>,
-    pub relocations: Vec<CoffRelocation>,
+    pub relocations: Vec<Relocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -284,7 +284,7 @@ impl<'a> Parse<'a> for Object<'a> {
 
                 let section_relocs: Vec<_> = repeat(
                     section.header.number_of_relocations as usize,
-                    CoffRelocation::parse,
+                    Relocation::parse,
                 )
                 .context(StrContext::Label("relocations"))
                 .parse_next(reloc_data)?;

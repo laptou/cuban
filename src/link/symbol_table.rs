@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{bail, Context};
 use derive_more::From;
+use tracing::{info, trace, Level};
 
 use crate::{
     coff::{
@@ -20,7 +21,7 @@ use crate::{
 
 #[derive(Debug, Clone, Default)]
 pub struct LocalSymbolTable<'a> {
-    symbols: Vec<LocalSymbol<'a>>,
+    symbols: HashMap<SymbolIdx, LocalSymbol<'a>>,
     comdat_symbols: HashMap<SectionIdx, &'a SymbolTableEntry>, // name_map: HashMap<&'a str, &'a SymbolTableEntry>,
 }
 
@@ -48,20 +49,20 @@ pub enum LocalSymbol<'a> {
 }
 
 impl<'a> LocalSymbolTable<'a> {
-    fn insert(&mut self, entry: LocalSymbol<'a>) {
+    fn insert(&mut self, index: SymbolIdx, entry: LocalSymbol<'a>) {
         if let LocalSymbol::ComdatStatic { entry } = &entry {
             let section_idx = SectionIdx(entry.section_number as usize - 1);
 
-            println!("found COMDAT symbol at {section_idx:?}");
+            info!("found COMDAT symbol at {section_idx:?}");
 
             self.comdat_symbols.insert(section_idx, *entry);
         }
 
-        self.symbols.push(entry);
+        self.symbols.insert(index, entry);
     }
 
     fn get_idx(&self, symbol_idx: SymbolIdx) -> Option<LocalSymbol<'a>> {
-        self.symbols.get(symbol_idx.0).cloned()
+        self.symbols.get(&symbol_idx).cloned()
     }
 
     fn get_comdat(&self, section_idx: SectionIdx) -> Option<&'a SymbolTableEntry> {
@@ -165,9 +166,13 @@ pub enum SymbolResolutionError<'a> {
 }
 
 impl<'a> GlobalSymbolTable<'a> {
+    #[tracing::instrument(skip_all, level = Level::TRACE)]
     pub fn retain_used(&mut self, used_symbols: &HashSet<&'a str>) {
-        self.global_symbols
-            .retain(|name, _| used_symbols.contains(name));
+        self.global_symbols.retain(|name, _| {
+            let status = used_symbols.contains(name);
+            trace!("retain {name:?}: {status}");
+            status
+        });
     }
 
     pub fn new() -> Self {
@@ -177,6 +182,7 @@ impl<'a> GlobalSymbolTable<'a> {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(object_idx = ?object_idx), level = Level::DEBUG)]
     pub fn add_all(
         &mut self,
         symbol_table: &'a SymbolTable,
@@ -192,10 +198,10 @@ impl<'a> GlobalSymbolTable<'a> {
                 .as_str(string_table)
                 .context("could not resolve symbol name")?;
 
-            println!(
-                "processing symbol {name} with storage class {:?}",
-                entry.storage_class
-            );
+            // trace!(
+            //     "processing symbol {name} with storage class {:?}",
+            //     entry.storage_class
+            // );
 
             match entry.storage_class {
                 StorageClass::External => {
@@ -230,7 +236,7 @@ impl<'a> GlobalSymbolTable<'a> {
                             .transpose()?;
 
                         if let Some(comdat_info) = comdat_info {
-                            println!(
+                            trace!(
                                 "found COMDAT info for symbol {name} at {:?}: {comdat_info:?}",
                                 new_def.section_id
                             );
@@ -295,7 +301,7 @@ impl<'a> GlobalSymbolTable<'a> {
                                 }
                             }
                         } else {
-                            println!(
+                            trace!(
                                 "did not find COMDAT info for symbol {name} at {:?}",
                                 new_def.section_id
                             );
@@ -309,7 +315,7 @@ impl<'a> GlobalSymbolTable<'a> {
                         }
                     } else {
                         if !self.global_symbols.contains_key(name) {
-                            println!("symbol {name} is undefined");
+                            trace!("symbol {name} is undefined");
                             // put a stub in the GST
                             self.global_symbols.insert(
                                 name,
@@ -319,13 +325,14 @@ impl<'a> GlobalSymbolTable<'a> {
                                 },
                             );
                         } else {
-                            println!(
+                            trace!(
                                 "symbol {name} is undefined here, but already defined elsewhere"
                             );
                         }
                     }
 
                     self.local_symbols.entry(object_idx).or_default().insert(
+                        entry.offset,
                         LocalSymbol::External {
                             entry,
                             resolution: None,
@@ -347,10 +354,9 @@ impl<'a> GlobalSymbolTable<'a> {
 
                     let alternate_idx = SymbolIdx(tag_index as usize);
 
-                    self.local_symbols
-                        .entry(object_idx)
-                        .or_default()
-                        .insert(LocalSymbol::Weak {
+                    self.local_symbols.entry(object_idx).or_default().insert(
+                        entry.offset,
+                        LocalSymbol::Weak {
                             name,
                             resolution: None,
                             alternate: symbol_table
@@ -361,18 +367,19 @@ impl<'a> GlobalSymbolTable<'a> {
                                     format!("could not resolve alternate symbol for {name:?}")
                                 })?,
                             characteristics,
-                        });
+                        },
+                    );
                 }
                 StorageClass::Static | StorageClass::Label | StorageClass::Section => {
                     // is this a section symbol? if so, we need to check for COMDAT sections
                     if let Some(_) = entry.section_info() {
-                        println!("symbol {name} is a section symbol");
+                        trace!("symbol {name} is a section symbol");
                         if let Some(_) = get_comdat_info(entry, section_map, object_idx)? {
-                            println!("symbol {name} is a COMDAT symbol");
+                            trace!("symbol {name} is a COMDAT symbol");
                             self.local_symbols
                                 .entry(object_idx)
                                 .or_default()
-                                .insert(LocalSymbol::ComdatStatic { entry });
+                                .insert(entry.offset, LocalSymbol::ComdatStatic { entry });
 
                             continue;
                         }
@@ -382,7 +389,7 @@ impl<'a> GlobalSymbolTable<'a> {
                     self.local_symbols
                         .entry(object_idx)
                         .or_default()
-                        .insert(LocalSymbol::Static { entry });
+                        .insert(entry.offset, LocalSymbol::Static { entry });
                 }
                 StorageClass::Function => {
                     // TODO
@@ -433,7 +440,7 @@ impl<'a> GlobalSymbolTable<'a> {
             let string_table = string_tables.get(&object_idx).copied();
 
             // Need to process each symbol in the local table
-            for symbol in &mut local_table.symbols {
+            for (_, symbol) in &mut local_table.symbols {
                 match symbol {
                     LocalSymbol::External { entry, resolution } => {
                         if resolution.is_none() {
@@ -450,12 +457,16 @@ impl<'a> GlobalSymbolTable<'a> {
                             })?;
 
                             // Look up in global symbols table
-                            if let Some(global_sym) = self.global_symbols.get(name) {
-                                let global_def = global_sym.definition.clone().unwrap();
-
+                            if let Some(global_def) = self
+                                .global_symbols
+                                .get(name)
+                                .and_then(|sym| sym.definition.clone())
+                            {
+                                // global symbol has a definition, complete the resolution
                                 resolution.replace(global_def);
                                 successful_resolutions += 1;
                             } else {
+                                // global symbol is missing or not yet defined
                                 undefined_symbols.insert(name);
                             }
                         }
