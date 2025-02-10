@@ -344,7 +344,7 @@ impl<'a> Parse<'a> for SymbolTableEntry {
                     let pointer_to_line_number = le_u32.parse_next(input)?;
                     let pointer_to_next_function = le_u32.parse_next(input)?;
                     take(2usize).parse_next(input)?; // Unused
-                    
+
                     AuxSymbolRecord::Function(AuxSymbolRecordFunction {
                         tag_index,
                         total_size,
@@ -357,7 +357,7 @@ impl<'a> Parse<'a> for SymbolTableEntry {
                     let line_number = le_u16.parse_next(input)?;
                     let pointer_to_next_function = le_u32.parse_next(input)?;
                     take(12usize).parse_next(input)?; // Unused
-                    
+
                     AuxSymbolRecord::BeginEndFunction(AuxSymbolRecordBeginEndFunction {
                         line_number,
                         pointer_to_next_function,
@@ -368,10 +368,10 @@ impl<'a> Parse<'a> for SymbolTableEntry {
                     let tag_index = le_u32.parse_next(input)?;
                     let characteristics = le_u32.parse_next(input)?;
                     take(10usize).parse_next(input)?; // Unused
-                    
+
                     let characteristics = WeakExternalCharacteristics::from_u32(characteristics)
                         .unwrap_or(WeakExternalCharacteristics::NoLibrarySearch);
-                        
+
                     AuxSymbolRecord::WeakExternal(AuxSymbolRecordWeakExternal {
                         tag_index,
                         characteristics,
@@ -392,10 +392,10 @@ impl<'a> Parse<'a> for SymbolTableEntry {
                     let checksum = le_u32.parse_next(input)?;
                     let number = le_u16.parse_next(input)?;
                     let selection = input.next_token().unwrap();
-                    let selection = ComdatSelection::from_u8(selection)
-                        .unwrap_or(ComdatSelection::Any);
+                    let selection =
+                        ComdatSelection::from_u8(selection).unwrap_or(ComdatSelection::Any);
                     take(3usize).parse_next(input)?; // Unused
-                    
+
                     AuxSymbolRecord::Section(AuxSymbolRecordSection {
                         length,
                         number_of_relocations,
@@ -429,4 +429,3 @@ impl<'a> Parse<'a> for SymbolTableEntry {
         Ok(entry)
     }
 }
-

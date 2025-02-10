@@ -1,19 +1,24 @@
 use std::collections::{HashMap, HashSet};
+use std::io::{stdin, IsTerminal};
 use std::ops::Deref;
 use std::{borrow::Cow, path::PathBuf, str::FromStr};
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use coff::archive::{ArchiveMemberContent, CoffArchive};
+use coff::archive::{Archive, ArchiveMemberContent};
 use coff::relocations::{I386RelocationType, RelocationType};
 use coff::symbol_table::{StorageClass, SymbolTableEntry};
-use coff::{Object, ObjectIdx, Section, SectionId, SectionIdx, SymbolIdx};
+use coff::{LibraryIdx, Object, ObjectIdx, Section, SectionId, SectionIdx, SymbolIdx};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
 use link::relocations::apply_relocations;
 use link::symbol_table::{GlobalSymbolTable, LocalSymbol, SymbolResolutionError};
 use parse::{Layout, Parse, Write};
 use pe::{DosHeader, PeFile};
+use tracing::debug;
+use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
 
 mod coff;
 mod flags;
@@ -27,7 +32,20 @@ struct Cli {
     input_files: Vec<PathBuf>,
 }
 
+struct Library<'a> {
+    pub archive: Archive<'a>,
+    pub path: PathBuf,
+    pub objects: HashMap<ObjectIdx, Object<'a>>,
+}
+
 fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+        .with_ansi(stdin().is_terminal())
+        .finish()
+        .init();
+
     let cli = Cli::parse();
 
     let file_data: Vec<_> = cli
@@ -37,8 +55,11 @@ fn main() -> anyhow::Result<()> {
         .try_collect()?;
 
     let mut input_object_files: Vec<Object<'_>> = vec![];
-    let mut library_files: Vec<(CoffArchive<'_>, Vec<Object<'_>>)> = vec![];
-    let mut symbol_to_library_map: HashMap<&str, (usize, usize)> = HashMap::new();
+    let mut libraries: Vec<Library<'_>> = vec![];
+    let mut symbol_to_library_map: HashMap<&str, (LibraryIdx, ObjectIdx)> = HashMap::new();
+
+    let mut library_idx = 0;
+    let mut object_idx = 0;
 
     for (file_path, file_data) in &file_data {
         match file_path
@@ -47,35 +68,23 @@ fn main() -> anyhow::Result<()> {
             .as_deref()
         {
             Some("lib") => {
-                let archive = CoffArchive::parse(&mut file_data.as_slice())
+                let library_idx = LibraryIdx({
+                    // would love it if rust had ++ operator
+                    let tmp = library_idx;
+                    library_idx += 1;
+                    tmp
+                });
+
+                let archive = Archive::parse(&mut file_data.as_slice())
                     .map_err(|e| anyhow::anyhow!(e))
                     .with_context(|| format!("error parsing archive {file_path:?}"))?;
 
-                // Build symbol map from linker members
-                if let Some(linker) = &archive.second_linker {
-                    for (idx, name) in &linker.symbols {
-                        symbol_to_library_map.insert(
-                            name.as_ref(),
-                            (library_files.len(), *idx as usize),
-                        );
-                    }
-                } else if let Some(linker) = &archive.first_linker {
-                    for (offset, name) in &linker.symbols {
-                        // Find member index by offset
-                        if let Some(member_idx) = archive.members.iter().position(|m| {
-                            let member_offset = (m.data.as_ptr() as usize) - (file_data.as_ptr() as usize);
-                            member_offset == *offset as usize
-                        }) {
-                            symbol_to_library_map.insert(
-                                name.as_ref(),
-                                (library_files.len(), member_idx),
-                            );
-                        }
-                    }
-                }
+                let mut objects = HashMap::new();
+                // allows mapping from local object indices to global object indices
+                let mut members_indices = vec![];
+                // allows mapping from file offsets to object indices
+                let mut members_offsets = HashMap::new();
 
-                // Parse object files but don't process them yet
-                let mut objects = Vec::new();
                 for (idx, member) in archive.members.iter().enumerate() {
                     let member_content = ArchiveMemberContent::parse(&mut &member.data[..])
                         .map_err(|e| anyhow::anyhow!(e))
@@ -84,46 +93,67 @@ fn main() -> anyhow::Result<()> {
                         })?;
 
                     match member_content {
-                        ArchiveMemberContent::Object(object) => {
-                            objects.push(object);
+                        ArchiveMemberContent::Object(mut obj) => {
+                            obj.idx = ObjectIdx(object_idx);
+
+                            for section in &mut obj.sections {
+                                section.id.object_idx = obj.idx;
+                            }
+
+                            object_idx += 1;
+                            members_indices.push(Some(obj.idx));
+                            members_offsets.insert(member.offset, Some(obj.idx));
+
+                            objects.insert(obj.idx, obj);
                         }
-                        ArchiveMemberContent::ShortImportLibrary(_) => {}
+                        ArchiveMemberContent::ShortImportLibrary(_) => {
+                            // TODO
+                            members_indices.push(None);
+                            members_offsets.insert(member.offset, None);
+                        }
                     }
                 }
-                
-                library_files.push((archive, objects));
+
+                // Build symbol map from linker members
+                if let Some(linker) = &archive.second_linker {
+                    for (obj_idx, name) in &linker.symbols {
+                        let obj_idx = *obj_idx;
+                        if let Some(global_obj_idx) = members_indices[obj_idx as usize] {
+                            symbol_to_library_map.insert(name, (library_idx, global_obj_idx));
+                        }
+                    }
+                } else if let Some(linker) = &archive.first_linker {
+                    for &(offset, name) in &linker.symbols {
+                        let entry = *members_offsets.get(&(offset as usize)).context("malformed library file: symbol offset does not match any member offset")?;
+
+                        if let Some(global_obj_idx) = entry {
+                            symbol_to_library_map.insert(name, (library_idx, global_obj_idx));
+                        }
+                    }
+                }
+
+                libraries.push(Library {
+                    archive,
+                    path: file_path.to_owned(),
+                    objects,
+                });
             }
             Some("obj") => {
-                let obj = Object::parse(&mut file_data.as_slice())
+                let mut obj = Object::parse(&mut file_data.as_slice())
                     .map_err(|e| anyhow::anyhow!(e))
                     .with_context(|| format!("error parsing object {file_path:?}"))?;
+
+                obj.idx = ObjectIdx(object_idx);
+
+                for section in &mut obj.sections {
+                    section.id.object_idx = obj.idx;
+                }
+
+                object_idx += 1;
 
                 input_object_files.push(obj)
             }
             other => bail!("unknown extension {other:?}"),
-        }
-    }
-
-    let mut object_file_idx = 0;
-
-    for object_file in input_object_files.iter_mut() {
-        object_file.idx = ObjectIdx(object_file_idx);
-
-        for section in &mut object_file.sections {
-            section.id.object_idx = ObjectIdx(object_file_idx);
-        }
-
-        object_file_idx += 1;
-    }
-
-    // Assign object indices to library files but don't process them yet
-    for (_, objects) in &mut library_files {
-        for object_file in objects.iter_mut() {
-            object_file.idx = ObjectIdx(object_file_idx);
-            for section in &mut object_file.sections {
-                section.id.object_idx = ObjectIdx(object_file_idx);
-            }
-            object_file_idx += 1;
         }
     }
 
@@ -135,8 +165,7 @@ fn main() -> anyhow::Result<()> {
     // Find entry point and trace symbol usage
     let (_, mut symbol_usage) = find_entry_point(&input_object_files, &global_symbols)?;
 
-    println!("Used symbols: {:?}", symbol_usage.used_symbols);
-    println!("Undefined symbols: {:?}", symbol_usage.undefined_symbols);
+    debug!("symbol usage: {symbol_usage:#?}");
 
     // Build map of string tables
     let mut string_tables: HashMap<_, _> = input_object_files
@@ -165,45 +194,48 @@ fn main() -> anyhow::Result<()> {
 
                 // Search libraries using symbol map
                 for undefined_symbol in &undefined_symbols {
-                    if let Some(&(lib_idx, obj_idx)) = symbol_to_library_map.get(undefined_symbol) {
-                        let (_, lib_objects) = &library_files[lib_idx];
-                        let lib_obj = &lib_objects[obj_idx];
+                    if let Some(&(lib_idx, object_idx)) =
+                        symbol_to_library_map.get(undefined_symbol)
+                    {
+                        let library = &libraries[lib_idx.0];
+                        let obj = library.objects.get(&object_idx).unwrap();
 
                         // Skip if we've already included this object
-                        if used_library_object_idxs.contains(&lib_obj.idx) {
+                        if used_library_object_idxs.contains(&object_idx) {
                             continue;
                         }
 
-                        if let Some(symbol_table) = &lib_obj.symbol_table {
-                            let section_map = lib_obj.sections.iter().map(|s| (s.id, s)).collect();
-                            let lib_str_table = lib_obj.string_table.as_ref();
+                        if let Some(symbol_table) = &obj.symbol_table {
+                            let section_map = obj.sections.iter().map(|s| (s.id, s)).collect();
+                            let string_table = obj.string_table.as_ref();
 
                             // Add all symbols from this object
                             global_symbols.add_all(
                                 symbol_table,
-                                lib_str_table,
+                                string_table,
                                 &section_map,
-                                lib_obj.idx,
+                                object_idx,
                             )?;
 
-                            if let Some(lib_str_table) = lib_str_table {
-                                string_tables.insert(lib_obj.idx, lib_str_table);
+                            if let Some(string_table) = string_table {
+                                string_tables.insert(object_idx, string_table);
                             }
 
                             // Find the specific symbol we needed
                             for entry in &symbol_table.entries {
-                                if let Some(name) = entry.name.as_str(lib_str_table) {
+                                if let Some(name) = entry.name.as_str(string_table) {
                                     if name == *undefined_symbol {
                                         if entry.section_number > 0 {
-                                            let section_idx = SectionIdx(entry.section_number as usize - 1);
+                                            let section_idx =
+                                                SectionIdx(entry.section_number as usize - 1);
+
                                             let section_id = SectionId {
                                                 section_idx,
-                                                object_idx: lib_obj.idx,
+                                                object_idx,
                                             };
 
                                             println!(
-                                                "found undefined symbol {name} in library object file {:?}",
-                                                lib_obj.idx
+                                                "found undefined symbol {name} in library object file {object_idx:?}",
                                             );
 
                                             let section = *section_map
@@ -218,7 +250,7 @@ fn main() -> anyhow::Result<()> {
                                                 &mut symbol_usage,
                                             )?;
 
-                                            used_library_object_idxs.insert(lib_obj.idx);
+                                            used_library_object_idxs.insert(object_idx);
                                             break;
                                         }
                                     }
@@ -235,10 +267,11 @@ fn main() -> anyhow::Result<()> {
 
     let mut used_object_files = input_object_files.clone();
     // Add used library objects
-    for (_, lib_objects) in &library_files {
+    for library in &libraries {
         used_object_files.extend(
-            lib_objects
-                .iter()
+            library
+                .objects
+                .values()
                 .filter(|o| used_library_object_idxs.contains(&o.idx))
                 .cloned(),
         );

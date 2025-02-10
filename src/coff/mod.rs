@@ -1,6 +1,8 @@
 //! Parser for Common Object File Format (COFF).
 
 use std::borrow::Cow;
+use std::path::Path;
+use std::sync::Arc;
 
 use derive_more::From;
 use derive_more::Into;
@@ -29,6 +31,9 @@ pub mod relocations;
 pub mod sections;
 pub mod string_table;
 pub mod symbol_table;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
+pub struct LibraryIdx(pub usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, From, Into)]
 pub struct ObjectIdx(pub usize);

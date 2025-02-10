@@ -5,7 +5,7 @@ use anyhow::{bail, Context};
 use crate::coff::{
     relocations::{I386RelocationType, RelocationType},
     symbol_table::SymbolTableEntry,
-    Section, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
+    ObjectIdx, Section, SectionId, SectionIdx, SymbolIdx,
 };
 
 use super::symbol_table::{

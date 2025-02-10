@@ -13,7 +13,7 @@ use crate::{
             AuxSymbolRecord, AuxSymbolRecordSection, AuxSymbolRecordWeakExternal, ComdatSelection,
             Name, StorageClass, SymbolTable, SymbolTableEntry, WeakExternalCharacteristics,
         },
-        Section, ObjectIdx, SectionId, SectionIdx, SymbolIdx,
+        ObjectIdx, Section, SectionId, SectionIdx, SymbolIdx,
     },
     flags::SectionCharacteristics,
 };

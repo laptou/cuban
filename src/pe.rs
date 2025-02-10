@@ -10,9 +10,9 @@ use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 
+use crate::coff::ObjectIdx;
 use crate::coff::Section;
 use crate::coff::SectionId;
-use crate::coff::ObjectIdx;
 use crate::coff::SectionIdx;
 use crate::coff::SymbolIdx;
 use crate::parse::{Layout, Write};

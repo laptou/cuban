@@ -1,2 +1,2 @@
-pub mod symbol_table;
 pub mod relocations;
+pub mod symbol_table;

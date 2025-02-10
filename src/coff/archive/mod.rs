@@ -22,7 +22,7 @@ const LINKER_MEMBER: &[u8] = b"/               ";
 const LONGNAMES_MEMBER: &[u8] = b"//              ";
 
 #[derive(Debug, Clone)]
-pub struct CoffArchive<'a> {
+pub struct Archive<'a> {
     pub first_linker: Option<FirstLinkerMember<'a>>,
     pub second_linker: Option<SecondLinkerMember<'a>>,
     pub longnames: Option<LongnamesMember<'a>>,
@@ -31,6 +31,8 @@ pub struct CoffArchive<'a> {
 
 #[derive(Debug, Clone)]
 pub struct ArchiveMember<'a> {
+    pub offset: usize,
+
     pub header: ArchiveMemberHeader<'a>,
     pub data: &'a [u8],
 }
@@ -77,13 +79,13 @@ pub enum ArchiveMemberName<'a> {
 
 #[derive(Debug, Clone)]
 pub struct FirstLinkerMember<'a> {
-    pub symbols: Vec<(u32, Cow<'a, str>)>, // (offset, name) pairs
+    pub symbols: Vec<(u32, &'a str)>, // (offset, name) pairs
 }
 
 #[derive(Debug, Clone)]
 pub struct SecondLinkerMember<'a> {
     pub member_offsets: Vec<u32>,
-    pub symbols: Vec<(u16, Cow<'a, str>)>, // (index, name) pairs
+    pub symbols: Vec<(u16, &'a str)>, // (index, name) pairs
 }
 
 #[derive(Debug, Clone)]
@@ -91,7 +93,7 @@ pub struct LongnamesMember<'a> {
     pub strings: &'a [u8],
 }
 
-impl<'a> Parse<'a> for CoffArchive<'a> {
+impl<'a> Parse<'a> for Archive<'a> {
     type Error = ContextError;
 
     fn parse(input: &mut &'a [u8]) -> Result<Self, Self::Error> {
@@ -109,9 +111,12 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
 
         while !input.is_empty() {
             let offset = all_data.len() - input.len();
+
             let mut member: ArchiveMember<'a> = ArchiveMember::parse
                 .context(StrContext::Label("archive member"))
                 .parse_next(input)?;
+
+            member.offset = offset;
 
             match &member.header.name {
                 ArchiveMemberName::Linker => {
@@ -121,29 +126,29 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
                                 .context(StrContext::Label("first linker member"))
                                 .parse_next(&mut member.data)?,
                         );
-                        println!("found first linker {first_linker:?}");
+                        // println!("found first linker {first_linker:?}");
                     } else {
                         second_linker = Some(
                             SecondLinkerMember::parse
                                 .context(StrContext::Label("second linker member"))
                                 .parse_next(&mut member.data)?,
                         );
-                        println!("found second linker {second_linker:?}");
+                        // println!("found second linker {second_linker:?}");
                     }
                 }
                 ArchiveMemberName::Longnames => {
                     longnames = Some(LongnamesMember {
                         strings: member.data,
                     });
-                    println!("found longnames {:?}", member.header);
+                    // println!("found longnames {:?}", member.header);
                 }
                 _ => {
-                    println!(
-                        "found member {} at offset {offset:x} size {:x}: {:?}",
-                        members.len(),
-                        member.header.size,
-                        member.header
-                    );
+                    // println!(
+                    //     "found member {} at offset {offset:x} size {:x}: {:?}",
+                    //     members.len(),
+                    //     member.header.size,
+                    //     member.header
+                    // );
 
                     members.push(member)
                 }
@@ -155,7 +160,7 @@ impl<'a> Parse<'a> for CoffArchive<'a> {
             }
         }
 
-        Ok(CoffArchive {
+        Ok(Archive {
             first_linker,
             second_linker,
             longnames,
@@ -175,7 +180,11 @@ impl<'a> Parse<'a> for ArchiveMember<'a> {
             .context(StrContext::Label("member data"))
             .parse_next(input)?;
 
-        Ok(ArchiveMember { header, data })
+        Ok(ArchiveMember {
+            offset: 0,
+            header,
+            data,
+        })
     }
 }
 
@@ -271,7 +280,7 @@ impl<'a> Parse<'a> for FirstLinkerMember<'a> {
                 .context(StrContext::Label("symbol name"))
                 .parse_next(input)?;
 
-            symbols.push((offset, Cow::Borrowed(name)));
+            symbols.push((offset, name));
         }
 
         Ok(FirstLinkerMember { symbols })
@@ -296,7 +305,7 @@ impl<'a> Parse<'a> for SecondLinkerMember<'a> {
                 .context(StrContext::Label("symbol name"))
                 .parse_next(input)?;
 
-            symbols.push((index, Cow::Borrowed(name)));
+            symbols.push((index, name));
         }
 
         Ok(SecondLinkerMember {
