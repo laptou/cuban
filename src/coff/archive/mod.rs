@@ -4,7 +4,7 @@ use std::str::FromStr;
 use winnow::{
     ascii::digit1,
     binary::{be_u32, le_u16, le_u32},
-    combinator::{alt, empty, opt, preceded, repeat},
+    combinator::{alt, opt, preceded, repeat},
     error::{ContextError, StrContext},
     prelude::*,
     token::{take, take_until},

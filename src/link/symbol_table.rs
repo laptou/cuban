@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context};
 use derive_more::From;
@@ -11,8 +8,8 @@ use crate::{
     coff::{
         string_table::StringTable,
         symbol_table::{
-            AuxSymbolRecord, AuxSymbolRecordSection, AuxSymbolRecordWeakExternal, ComdatSelection,
-            Name, StorageClass, SymbolTable, SymbolTableEntry, WeakExternalCharacteristics,
+            AuxSymbolRecord, AuxSymbolRecordWeakExternal, ComdatSelection, StorageClass,
+            SymbolTable, SymbolTableEntry, WeakExternalCharacteristics,
         },
         ObjectIdx, Section, SectionId, SectionIdx, SymbolIdx,
     },

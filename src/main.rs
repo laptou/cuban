@@ -1,14 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{stdin, IsTerminal};
-use std::ops::Deref;
 use std::{borrow::Cow, path::PathBuf, str::FromStr};
 
 use anyhow::{bail, Context};
 use clap::Parser;
 use coff::archive::{Archive, ArchiveMemberContent};
-use coff::relocations::{I386RelocationType, RelocationType};
 use coff::string_table::StringTable;
-use coff::symbol_table::{StorageClass, SymbolTableEntry};
+use coff::symbol_table::SymbolTableEntry;
 use coff::{LibraryIdx, Object, ObjectIdx, Section, SectionId, SectionIdx, SymbolIdx};
 use flags::{DllCharacteristics, FileCharacteristics, SectionCharacteristics};
 use itertools::Itertools;
@@ -18,7 +15,7 @@ use link::symbol_table::{
 };
 use parse::{Layout, Parse, Write};
 use pe::{DosHeader, PeFile};
-use tracing::{debug, debug_span, error, info, trace, Level};
+use tracing::{debug, debug_span, info, trace, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;

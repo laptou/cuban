@@ -2,7 +2,6 @@ use num_traits::FromPrimitive;
 use std::borrow::Cow;
 use winnow::{
     binary::{le_u16, le_u32, le_u8},
-    combinator::preceded,
     error::ContextError,
     token::take_until,
     Parser,

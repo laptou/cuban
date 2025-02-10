@@ -1,12 +1,11 @@
 use bytes::BufMut;
 use num_traits::FromPrimitive;
-use thiserror::Error;
 use winnow::binary::le_u16;
 use winnow::binary::le_u32;
 use winnow::binary::le_u64;
 use winnow::combinator::repeat;
 use winnow::error::ParserError;
-use winnow::error::{ContextError, ParseError, StrContext};
+use winnow::error::{ContextError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 

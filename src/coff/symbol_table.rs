@@ -1,6 +1,4 @@
-use std::{borrow::Cow, collections::HashMap};
-
-use anyhow::{bail, Context as _};
+use anyhow::Context as _;
 use bytes::BufMut;
 use derive_more::From;
 use num_derive::{FromPrimitive, ToPrimitive};
@@ -18,7 +16,7 @@ use crate::{
     util::fmt::ByteStr,
 };
 
-use super::{string_table::StringTable, ObjectIdx, SymbolIdx};
+use super::{string_table::StringTable, SymbolIdx};
 
 #[derive(Debug, Clone)]
 pub struct SymbolTable {

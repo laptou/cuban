@@ -1,8 +1,6 @@
 //! Parser for Common Object File Format (COFF).
 
 use std::borrow::Cow;
-use std::path::Path;
-use std::sync::Arc;
 
 use derive_more::From;
 use derive_more::Into;
@@ -19,8 +17,6 @@ use winnow::error::{ContextError, ParseError, StrContext};
 use winnow::prelude::*;
 use winnow::token::take;
 use winnow::token::take_till;
-use winnow::token::take_until;
-use winnow::token::take_while;
 
 use crate::flags::FileCharacteristics;
 use crate::flags::SectionCharacteristics;
