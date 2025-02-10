@@ -45,13 +45,11 @@ pub enum ArchiveMemberContent<'a> {
 
 impl<'a> ArchiveMemberContent<'a> {
     pub fn parse(data: &mut &'a [u8]) -> Result<Self, ContextError> {
-        // Try parsing as short import library first
-        if let Ok(import) = ShortImportLibrary::parse(data) {
-            Ok(ArchiveMemberContent::ShortImportLibrary(import))
-        } else {
-            // Otherwise try as COFF file
-            Ok(ArchiveMemberContent::Object(Object::parse(data)?))
-        }
+        alt((
+            Object::parse.map(ArchiveMemberContent::Object),
+            ShortImportLibrary::parse.map(ArchiveMemberContent::ShortImportLibrary),
+        ))
+        .parse_next(data)
     }
 }
 
@@ -280,6 +278,9 @@ impl<'a> Parse<'a> for FirstLinkerMember<'a> {
                 .context(StrContext::Label("symbol name"))
                 .parse_next(input)?;
 
+            // advance past null byte
+            *input = &input[1..];
+
             symbols.push((offset, name));
         }
 
@@ -304,6 +305,9 @@ impl<'a> Parse<'a> for SecondLinkerMember<'a> {
                 .try_map(std::str::from_utf8)
                 .context(StrContext::Label("symbol name"))
                 .parse_next(input)?;
+
+            // advance past null byte
+            *input = &input[1..];
 
             symbols.push((index, name));
         }

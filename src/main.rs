@@ -116,8 +116,14 @@ fn main() -> anyhow::Result<()> {
 
                 // Build symbol map from linker members
                 if let Some(linker) = &archive.second_linker {
+                    debug!("path = {file_path:?}");
+                    debug!("members_indices = {members_indices:#?}");
+                    debug!("members_offsets = {members_offsets:#?}");
+                    debug!("linker = {linker:#?}");
+
                     for (obj_idx, name) in &linker.symbols {
-                        let obj_idx = *obj_idx;
+                        // these indices are 1-based for some reason
+                        let obj_idx = *obj_idx - 1;
                         if let Some(global_obj_idx) = members_indices[obj_idx as usize] {
                             symbol_to_library_map.insert(name, (library_idx, global_obj_idx));
                         }
@@ -130,6 +136,8 @@ fn main() -> anyhow::Result<()> {
                             symbol_to_library_map.insert(name, (library_idx, global_obj_idx));
                         }
                     }
+                } else {
+                    bail!("no linker members");
                 }
 
                 libraries.push(Library {

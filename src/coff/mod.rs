@@ -247,7 +247,7 @@ impl<'a> Parse<'a> for Object<'a> {
             .context(StrContext::Label("coff header"))
             .parse_next(data)?;
 
-        dbg!(&file_header);
+        // dbg!(&file_header);
 
         let section_headers: Vec<_> = repeat(
             file_header.number_of_sections as usize,
